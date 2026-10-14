@@ -1,0 +1,11 @@
+--- a/src/dxgi/dxgi_output.cpp
++++ b/src/dxgi/dxgi_output.cpp
+@@ -230,7 +230,7 @@
+       return E_FAIL;
+     }
+     
+-    std::memcpy(pDesc->DeviceName, monInfo.szDevice, std::size(pDesc->DeviceName));
++    std::memcpy(pDesc->DeviceName, monInfo.szDevice, sizeof(pDesc->DeviceName));
+     
+     pDesc->DesktopCoordinates = monInfo.rcMonitor;
+     pDesc->AttachedToDesktop  = 1;

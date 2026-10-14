@@ -1,0 +1,13 @@
+# Freequay: rules tested in Freequay itself. They come before all rules from open sources.
+# Format: compat/README.md
+#
+# Steam and the Rockstar Games Launcher (2026-10-13): DXMT 0.80 aborts when Direct2D calls
+# SwapDeviceContextState, and our DXVK is built without Direct3D 10.
+exe:steam.exe	backend=wined3d
+exe:steamwebhelper.exe	backend=wined3d
+exe:\Rockstar Games\Launcher\Launcher.exe	backend=wined3d
+exe:LauncherPatcher.exe	backend=wined3d
+exe:SocialClubHelper.exe	backend=wined3d
+# Team Fortress 2 (DirectX 9, 2026-10-13): runs smoothly with wined3d. DXVK drew a black screen
+# before patch moltenvk-0002 and has not been tried again since.
+steam:440	backend=wined3d

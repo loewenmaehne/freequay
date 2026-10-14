@@ -1,0 +1,35 @@
+--- a/dlls/kernelbase/process.c
++++ b/dlls/kernelbase/process.c
+@@ -566,7 +566,32 @@
+             return FALSE;
+         }
+     }
++
++    /* freequay: Chromium-based helpers draw their windows from a separate GPU process, and
++     * macdrv does not show drawing from another process, so the windows stay black. Software
++     * rendering inside the browser process works; append the switches for the known helpers. */
++    {
++        static const WCHAR *cef_helpers[] = { L"\\SocialClubHelper.exe", L"\\steamwebhelper.exe" };
++        static const WCHAR cef_switches[] = L" --disable-gpu --disable-gpu-compositing --in-process-gpu";
++        unsigned int i;
+ 
++        for (i = 0; tidy_cmdline && i < ARRAY_SIZE(cef_helpers); i++)
++        {
++            WCHAR *new_cmdline;
++
++            if (!wcsstr( tidy_cmdline, cef_helpers[i] ) || wcsstr( tidy_cmdline, L"--in-process-gpu" )) continue;
++            if (!(new_cmdline = RtlAllocateHeap( GetProcessHeap(), 0,
++                                                 (lstrlenW( tidy_cmdline ) + ARRAY_SIZE(cef_switches)) * sizeof(WCHAR) )))
++                break;
++            lstrcpyW( new_cmdline, tidy_cmdline );
++            lstrcatW( new_cmdline, cef_switches );
++            FIXME( "HACK: appending %s for %s\n", debugstr_w(cef_switches), debugstr_w(cef_helpers[i]) );
++            if (tidy_cmdline != cmd_line) RtlFreeHeap( GetProcessHeap(), 0, tidy_cmdline );
++            tidy_cmdline = new_cmdline;
++            break;
++        }
++    }
++
+     /* Warn if unsupported features are used */
+ 
+     if (flags & (IDLE_PRIORITY_CLASS | HIGH_PRIORITY_CLASS | REALTIME_PRIORITY_CLASS |

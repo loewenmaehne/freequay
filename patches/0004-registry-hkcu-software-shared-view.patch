@@ -1,0 +1,74 @@
+--- a/server/registry.c
++++ b/server/registry.c
+@@ -213,6 +213,22 @@
+     return (struct key *)parent;
+ }
+ 
++/* freequay: HKCU\Software is shared between the 32- and 64-bit views since Windows 7, even when
++ * an application creates a Wow6432Node below it, as Steam does. Redirecting into that node hid
++ * HKCU\Software\Valve from games that ask for the 32-bit view. */
++static int is_user_software_key( const struct key *key )
++{
++    static const WCHAR softwareW[] = {'S','o','f','t','w','a','r','e'};
++    static const WCHAR userW[] = {'U','s','e','r'};
++    const struct key *sid, *user, *root;
++
++    if (!key->obj.name || key->obj.name->len != sizeof(softwareW) ||
++        memicmp_strW( key->obj.name->name, softwareW, sizeof(softwareW) )) return 0;
++    if (!(sid = get_parent( key )) || !(user = get_parent( sid )) || !(root = get_parent( user ))) return 0;
++    return user->obj.name->len == sizeof(userW) && !memicmp_strW( user->obj.name->name, userW, sizeof(userW) ) &&
++           !get_parent( root );
++}
++
+ /*
+  * The registry text file format v2 used by this code is similar to the one
+  * used by REGEDIT import/export functionality, with the following differences:
+@@ -607,7 +623,8 @@
+         parent_key->subkeys[i] = parent_key->subkeys[i - 1];
+     parent_key->subkeys[index] = (struct key *)grab_object( key );
+     if (is_wow6432node( name->name, name->len ) &&
+-        !is_wow6432node( parent_key->obj.name->name, parent_key->obj.name->len ))
++        !is_wow6432node( parent_key->obj.name->name, parent_key->obj.name->len ) &&
++        !is_user_software_key( parent_key ))
+         parent_key->wow6432node = key;
+     name->parent = parent;
+     return 1;
+--- a/dlls/kernelbase/registry.c
++++ b/dlls/kernelbase/registry.c
+@@ -151,6 +151,24 @@
+     return ret;
+ }
+ 
++/* freequay: HKCU\Software is shared between the 32- and 64-bit views since Windows 7, even when
++ * an application creates a Wow6432Node below it, as Steam does. Redirecting into that node hid
++ * HKCU\Software\Valve from 64-bit games that ask for the 32-bit view (steam_api64). */
++static BOOL is_user_software_key( HANDLE key )
++{
++    char buffer[256];
++    KEY_NAME_INFORMATION *info = (KEY_NAME_INFORMATION *)buffer;
++    DWORD len = sizeof(buffer), count;
++    const WCHAR *name, *p;
++
++    if (NtQueryKey( key, KeyNameInformation, info, len, &len )) return FALSE;
++    name = info->Name;
++    count = info->NameLength / sizeof(WCHAR);
++    if (count <= 15 || wcsnicmp( name, L"\\Registry\\User\\", 15 )) return FALSE;
++    for (p = name + 15; p < name + count && *p != '\\'; p++) ;
++    return name + count - p == 9 && !wcsnicmp( p, L"\\Software", 9 );
++}
++
+ /* Open the Wow6432Node subkey of the specified key */
+ static HANDLE open_wow6432node( HANDLE key )
+ {
+@@ -160,6 +178,11 @@
+ 
+     InitializeObjectAttributes( &attr, &nameW, 0, key, NULL );
+     if (NtOpenKeyEx( &ret, MAXIMUM_ALLOWED | KEY_WOW64_64KEY, &attr, 0 )) return key;
++    if (is_user_software_key( key ))
++    {
++        NtClose( ret );
++        return key;
++    }
+     return ret;
+ }
+ 

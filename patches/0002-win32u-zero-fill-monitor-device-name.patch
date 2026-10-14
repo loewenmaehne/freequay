@@ -1,0 +1,13 @@
+--- a/dlls/win32u/sysparams.c
++++ b/dlls/win32u/sysparams.c
+@@ -2393,6 +2393,10 @@
+         char buffer[CCHDEVICENAME];
+         if (monitor->source) snprintf( buffer, sizeof(buffer), "\\\\.\\DISPLAY%d", monitor->source->id + 1 );
+         else strcpy( buffer, "WinDisc" );
++        /* freequay: fill the rest of szDevice with zeros. DXMT, DXVK and D3DMetal copy all
++         * CCHDEVICENAME characters into DXGI_OUTPUT_DESC.DeviceName, and programs that read
++         * the whole field (the FFXIV benchmark launcher) otherwise pick up stack garbage. */
++        memset( ((MONITORINFOEXW *)info)->szDevice, 0, sizeof(((MONITORINFOEXW *)info)->szDevice) );
+         asciiz_to_unicode( ((MONITORINFOEXW *)info)->szDevice, buffer );
+     }
+ }

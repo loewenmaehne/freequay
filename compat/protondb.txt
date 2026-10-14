@@ -1,0 +1,98 @@
+# Freequay: rules from the reports on ProtonDB (protondb.com), open data export
+# github.com/bdefore/protondb-data, as of reports_oct1_2026, license ODbL 1.0 (database) and DbCL 1.0 (contents);
+# this file and the protondb rows of notes.tsv are under the ODbL 1.0.
+# Only switches that working reports since 2023 agree on; selection in scripts/compat/protondb.py.
+steam:440	args=-novid
+steam:2100	env=WINE_LARGE_ADDRESS_AWARE=1
+steam:6830	dll=dsound=n,b
+steam:7670	args=-nointro
+steam:9450	args=-nomovies	env=WINE_LARGE_ADDRESS_AWARE=1
+steam:12100	dll=ddraw=n,b
+steam:12130	dll=ddraw=n,b	dll=dinput8=n,b
+steam:12140	args=-skipstartup
+steam:12200	dll=dinput8=n,b
+steam:12210	dll=dinput8=n,b
+steam:13560	dll=msvfw32=n,b	dll=msacm32=n,b	dll=dinput8=n,b
+steam:17430	dll=dinput8=n,b
+steam:24780	args=-CustomResolution:enabled
+steam:24960	dll=dinput8=n,b
+steam:35450	args=-nostartupmovies
+steam:38410	dll=ddraw=n,b
+steam:39510	dll=ddraw=n,b
+steam:42960	env=WINE_LARGE_ADDRESS_AWARE=1
+steam:49520	args=-NoLauncher -NoStartupMovies
+steam:65800	args=-nolauncher -nosplash
+steam:91700	args=-novid
+steam:204880	args=/nolauncher
+steam:211420	dll=dinput8=n,b
+steam:218620	dll=wsock32=n,b
+steam:223750	dll=wbemprox=n
+steam:228200	args=-nomovies	env=WINE_LARGE_ADDRESS_AWARE=1
+steam:230820	dll=xaudio2_7=
+steam:231430	args=-nomovies
+steam:233270	args=-skipintro
+steam:241560	dll=dinput8=n,b
+steam:244850	args=-skipintro -useallavailablecores
+steam:251150	dll=dinput8=n,b
+steam:252530	env=WINE_LARGE_ADDRESS_AWARE=1
+steam:254700	dll=dinput8=n,b
+steam:256330	dll=xinput1_3=n,b
+steam:260190	dll=msvcp71=n	dll=msvcr71=n
+steam:268050	args=+com_skipIntroVideo 1
+steam:282030	dll=libogg-0=n,b	dll=winmm=n,b	dll=libvorbisfile-3=n,b
+steam:292140	env=WINE_LARGE_ADDRESS_AWARE=1
+steam:298110	args=-skipintro
+steam:312520	dll=winhttp=n,b
+steam:322170	dll=xinput1_4=n,b
+steam:338800	dll=ddraw=n
+steam:646910	dll=uplay_r1_loader64=n,b
+steam:736220	args=-USEALLAVAILABLECORES
+steam:747660	args=-dx11
+steam:748490	dll=dinput8=n,b
+steam:823500	env=WINE_LARGE_ADDRESS_AWARE=1
+steam:966680	args=-dx11
+steam:973230	args=-dx11
+steam:1018000	env=WINE_LARGE_ADDRESS_AWARE=1
+steam:1065180	dll=dsound=n
+steam:1073440	dll=winhttp=n,b
+steam:1137300	args=-d3d11
+steam:1175830	dll=xaudio2_8=n
+steam:1250410	args=-FastLaunch
+steam:1331440	dll=winhttp=n,b
+steam:1414850	dll=winusb=
+steam:1467450	dll=ddraw=n,b
+steam:1468810	dll=version=n,b
+steam:1515640	args=-dx11
+steam:1620340	dll=winhttp=n,b
+steam:1621310	dll=dinput8=n,b
+steam:1761390	dll=dinput8=n,b
+steam:1777620	dll=winhttp=n,b
+steam:1799930	args=-dx11
+steam:1912410	dll=xgameruntime=n
+steam:1928980	args=-ignore-windows-system-certs
+steam:1953520	dll=xinput1_3=n
+steam:1963370	args=-dx11
+steam:2081470	args=-dx11
+steam:2131640	dll=winhttp=n,b
+steam:2135150	dll=winhttp=n,b
+steam:2182690	dll=ddraw=n,b
+steam:2229850	dll=ddraw=n,b	args=-SPEEDCONTROL
+steam:2229880	dll=ddraw=n,b
+steam:2291020	dll=xaudio2_9=n
+steam:2383990	args=-dx11
+steam:2427410	args=-nointro
+steam:2440510	dll=xgameruntime=b
+steam:2515020	dll=dinput8=n,b
+steam:2677660	args=+com_skipIntroVideo 1
+steam:3017860	args=+com_skipIntroVideo 1
+steam:3407390	args=-force-d3d11
+steam:3419520	args=-dx11
+steam:3887700	dll=iphlpapi=n
+steam:3929740	dll=msvfw32=n,b	dll=msacm32=n,b	dll=dinput8=n,b
+steam:4249100	dll=ddraw=n,b
+steam:4249110	dll=ddraw=n,b
+steam:4249120	dll=ddraw=n,b
+steam:4249130	dll=ddraw=n,b
+steam:4249150	dll=dinput=n,b	dll=ddraw=n,b	dll=dinput8=n,b
+steam:4280890	dll=ddraw=n,b
+steam:4576490	dll=winhttp=n,b

@@ -1,0 +1,745 @@
+--- a/dlls/ntdll/Makefile.in
++++ b/dlls/ntdll/Makefile.in
+@@ -50,6 +50,7 @@
+ 	unix/debug.c \
+ 	unix/env.c \
+ 	unix/file.c \
++	unix/freequay.c \
+ 	unix/msync.c \
+ 	unix/loader.c \
+ 	unix/loadorder.c \
+--- a/dlls/ntdll/unix/env.c
++++ b/dlls/ntdll/unix/env.c
+@@ -63,6 +63,7 @@
+ #include "error.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(environ);
++WINE_DECLARE_DEBUG_CHANNEL(freequay);
+ 
+ PEB *peb = NULL;
+ WOW_PEB *wow_peb = NULL;
+@@ -1874,10 +1875,300 @@
+         wow_peb->ImageSubSystemMajorVersion      = peb->ImageSubSystemMajorVersion;
+         wow_peb->ImageSubSystemMinorVersion      = peb->ImageSubSystemMinorVersion;
+         wow_peb->SessionId                       = peb->SessionId;
++    }
++}
++
++
++/* freequay: compatibility rules per program (freequay.c). They are applied while the process
++ * parameters are built, before the main exe and any DLL are loaded. */
++
++static const WCHAR steamappidW[] = {'S','t','e','a','m','A','p','p','I','d',0};
++static const WCHAR steamgameidW[] = {'S','t','e','a','m','G','a','m','e','I','d',0};
++static const WCHAR freequay_launchW[] = {'F','R','E','E','Q','U','A','Y','_','S','T','E','A','M','_','L','A','U','N','C','H',0};
++
++/* set a variable in the Windows environment being built (if any) and the Unix one */
++static void freequay_set_env( WCHAR **env, SIZE_T *pos, SIZE_T *size, const char *name, const char *value )
++{
++    SIZE_T name_len = strlen( name ) + 1, value_len = value ? strlen( value ) + 1 : 0;
++    WCHAR *nameW = malloc( name_len * sizeof(WCHAR) ), *valueW = value ? malloc( value_len * sizeof(WCHAR) ) : NULL;
++
++    if (env && nameW && (valueW || !value))
++    {
++        ntdll_umbstowcs( name, name_len, nameW, name_len );
++        if (value) ntdll_umbstowcs( value, value_len, valueW, value_len );
++        set_env_var( env, pos, size, nameW, wcslen( nameW ), valueW );
++    }
++    free( nameW );
++    free( valueW );
++    if (value) setenv( name, value, 1 );
++    else unsetenv( name );
++}
++
++static char *freequay_get_env( WCHAR *env, SIZE_T pos, const WCHAR *name )
++{
++    WCHAR *value = get_env_var( env, pos, name, wcslen( name ) );
++    SIZE_T len;
++    char *ret;
++
++    if (!value) return NULL;
++    len = wcslen( value ) + 1;
++    if ((ret = malloc( len * 3 ))) ntdll_wcstoumbs( value, len, ret, len * 3, FALSE );
++    free( value );
++    return ret;
++}
++
++static void freequay_apply_env( WCHAR **env, SIZE_T *pos, SIZE_T *size )
++{
++    struct freequay_rules *r = &freequay_rules;
++    char *eq, *overrides, *old = getenv( "WINEDLLOVERRIDES" );
++    size_t len = old ? strlen( old ) + 2 : 1;
++    unsigned int i;
++
++    if (r->backend)
++    {
++        freequay_set_backend( r->backend );
++        freequay_set_env( env, pos, size, "CX_ACTIVE_GRAPHICS_BACKEND", getenv( "CX_ACTIVE_GRAPHICS_BACKEND" ) );
++    }
++    for (i = 0; i < r->env_count; i++)
++    {
++        if (!(eq = strchr( r->env[i], '=' ))) continue;
++        *eq = 0;
++        freequay_set_env( env, pos, size, r->env[i], eq[1] ? eq + 1 : NULL );
++        *eq = '=';
++    }
++    if (!r->dll_count) return;
++    for (i = 0; i < r->dll_count; i++) len += strlen( r->dll[i] ) + 1;
++    if (!(overrides = malloc( len ))) return;
++    for (i = 0, *overrides = 0; i < r->dll_count; i++)
++    {
++        if (i) strcat( overrides, ";" );
++        strcat( overrides, r->dll[i] );
++    }
++    if (old && *old)
++    {
++        strcat( overrides, ";" );
++        strcat( overrides, old );
++    }
++    freequay_set_env( env, pos, size, "WINEDLLOVERRIDES", overrides );
++    free( overrides );
++}
++
++/* is this the program Steam started for the game, and not an installer, crash handler or a
++ * program the game started itself? */
++static BOOL freequay_is_steam_game( const char *image, WCHAR *env, SIZE_T pos )
++{
++    static const char * const skip[] =
++    {
++        "\\_commonredist\\", "\\commonredist\\", "\\redist\\", "\\redistributables\\", "\\__installer\\",
++        "\\directx\\", "\\steamworks shared\\", "\\easyanticheat", "\\battleye\\", "crashhandler",
++        "crashreport", "crashpad", "bssndrpt", "\\unins",
++    };
++    char *path;
++    BOOL ret;
++    size_t i;
++
++    if (getenv( "FREEQUAY_STEAM_LAUNCH" ) || (env && find_env_var( env, pos, freequay_launchW, wcslen( freequay_launchW ) )))
++        return FALSE;
++    if (!(path = strdup( image ))) return FALSE;
++    for (i = 0; path[i]; i++)
++    {
++        if (path[i] == '/') path[i] = '\\';
++        else if (path[i] >= 'A' && path[i] <= 'Z') path[i] += 'a' - 'A';
++    }
++    ret = strstr( path, "\\steamapps\\common\\" ) != NULL;
++    for (i = 0; ret && i < ARRAY_SIZE(skip); i++) if (strstr( path, skip[i] )) ret = FALSE;
++    free( path );
++    return ret;
++}
++
++static USHORT freequay_pe_machine( const WCHAR *nt_path )
++{
++    UNICODE_STRING nt_name, true_nt_name;
++    OBJECT_ATTRIBUTES attr;
++    IMAGE_DOS_HEADER dos;
++    IMAGE_FILE_HEADER file;
++    char *unix_name;
++    DWORD signature;
++    USHORT ret = 0;
++    int fd;
++
++    init_unicode_string( &nt_name, nt_path );
++    InitializeObjectAttributes( &attr, &nt_name, OBJ_CASE_INSENSITIVE, 0, NULL );
++    if (get_nt_and_unix_names( &attr, &true_nt_name, &unix_name, FILE_OPEN, FALSE )) return 0;
++    if ((fd = open( unix_name, O_RDONLY )) != -1)
++    {
++        if (pread( fd, &dos, sizeof(dos), 0 ) == sizeof(dos) && dos.e_magic == IMAGE_DOS_SIGNATURE &&
++            pread( fd, &signature, sizeof(signature), dos.e_lfanew ) == sizeof(signature) &&
++            signature == IMAGE_NT_SIGNATURE &&
++            pread( fd, &file, sizeof(file), dos.e_lfanew + sizeof(signature) ) == sizeof(file))
++            ret = file.Machine;
++        close( fd );
++    }
++    free( unix_name );
++    free( true_nt_name.Buffer );
++    return ret;
++}
++
++static WCHAR *freequay_to_wide( const char *str )
++{
++    SIZE_T len = strlen( str ) + 1;
++    WCHAR *ret = malloc( len * sizeof(WCHAR) );
++
++    if (ret) ntdll_umbstowcs( str, len, ret, len );
++    return ret;
++}
++
++/* exe=<from>><to>: path of the program to start instead, as an NT path, or NULL */
++static WCHAR *freequay_replace_exe( const char *image )
++{
++    const char *rule = freequay_rules.exe, *gt = strchr( rule, '>' );
++    size_t image_len = strlen( image ), from_len = gt - rule, base;
++    char *path, *p, *q;
++    WCHAR *orig, *ret;
++    USHORT machine;
++
++    if (!freequay_tail_match( image, image_len, rule, from_len ) || strncmp( image, "\\??\\", 4 )) return NULL;
++    base = image_len - from_len;
++    if (!(path = malloc( base + strlen( gt + 1 ) + 2 ))) return NULL;
++    memcpy( path, image, base );
++    if (base && image[base - 1] != '\\') path[base++] = '\\';
++    strcpy( path + base, gt + 1 + (gt[1] == '\\' || gt[1] == '/') );
++    for (p = path; *p; p++) if (*p == '/') *p = '\\';
++    /* resolve . and .. after the \??\X:\ prefix */
++    for (p = path + 7; (q = strstr( p - 1, "\\.\\" )); ) memmove( q, q + 2, strlen( q + 2 ) + 1 );
++    while ((q = strstr( path + 6, "\\..\\" )))
++    {
++        for (p = q - 1; p > path + 6 && *p != '\\'; p--) ;
++        memmove( p, q + 3, strlen( q + 3 ) + 1 );
+     }
++    ret = freequay_to_wide( path );
++    orig = freequay_to_wide( image );
++    machine = ret && orig ? freequay_pe_machine( orig ) : 0;
++    if (!machine || freequay_pe_machine( ret ) != machine)
++    {
++        WARN_(freequay)( "not starting %s instead of %s\n", debugstr_a(path), debugstr_a(image) );
++        free( ret );
++        ret = NULL;
++    }
++    free( orig );
++    free( path );
++    return ret;
+ }
+ 
++/* args=, argdel= and exe=; returns the new command line or NULL, *image_ret the new program */
++static WCHAR *freequay_edit_cmdline( const WCHAR *cmdline, SIZE_T len, const char *image, const char *steam_id,
++                                     WCHAR **env, SIZE_T *pos, SIZE_T *size, WCHAR **image_ret )
++{
++    struct freequay_rules *r = &freequay_rules;
++    BOOL steam_game, changed = FALSE;
++    char *cmd, *tmp, *hit, *end;
++    unsigned int i;
++    size_t n;
++    WCHAR *ret;
+ 
++    if (image_ret) *image_ret = NULL;
++    if (!r->args && !r->argdel_count && !r->exe) return NULL;
++    steam_game = steam_id && freequay_is_steam_game( image, env ? *env : NULL, pos ? *pos : 0 );
++    if (!(cmd = malloc( len * 3 + 1 ))) return NULL;
++    cmd[ntdll_wcstoumbs( cmdline, len, cmd, len * 3, FALSE )] = 0;
++
++    if (r->exe && image_ret && (!r->exe_steam || steam_game) && (*image_ret = freequay_replace_exe( image )))
++    {
++        /* the new program also becomes the first word of the command line */
++        end = cmd[0] == '"' ? strchr( cmd + 1, '"' ) : strchr( cmd, ' ' );
++        end = end ? end + (cmd[0] == '"') : cmd + strlen( cmd );
++        n = wcslen( *image_ret ) * 3 + strlen( end ) + 3;
++        if ((tmp = malloc( n )))
++        {
++            tmp[0] = '"';
++            n = ntdll_wcstoumbs( *image_ret + 4, wcslen( *image_ret ) - 4, tmp + 1, n, FALSE ) + 1;
++            tmp[n++] = '"';
++            strcpy( tmp + n, end );
++            free( cmd );
++            cmd = tmp;
++            changed = TRUE;
++        }
++    }
++    for (i = 0; i < r->argdel_count && (!r->argdel_steam || steam_game); i++)
++    {
++        n = strlen( r->argdel[i] );
++        for (hit = cmd; (hit = strstr( hit + 1, r->argdel[i] )); )
++        {
++            if (hit[-1] != ' ' || (hit[n] && hit[n] != ' ')) continue;
++            memmove( hit - 1, hit + n, strlen( hit + n ) + 1 );
++            changed = TRUE;
++            hit--;
++        }
++    }
++    if (r->args && *r->args && (!r->args_steam || steam_game) && !strstr( cmd, r->args ) &&
++        (tmp = realloc( cmd, strlen( cmd ) + strlen( r->args ) + 2 )))
++    {
++        cmd = tmp;
++        strcat( cmd, " " );
++        strcat( cmd, r->args );
++        changed = TRUE;
++    }
++    if (steam_game && (r->args_steam || r->argdel_steam || r->exe_steam))
++        freequay_set_env( env, pos, size, "FREEQUAY_STEAM_LAUNCH", steam_id );
++
++    ret = changed ? freequay_to_wide( cmd ) : NULL;
++    if (ret) TRACE_(freequay)( "command line %s\n", debugstr_a(cmd) );
++    free( cmd );
++    return ret;
++}
++
++/* rules for a program started by another one; returns replacements for image and command line */
++static void freequay_child_rules( const struct startup_info_data *info, WCHAR **env, SIZE_T *pos, SIZE_T *size,
++                                  WCHAR **image_ret, WCHAR **cmdline_ret )
++{
++    const WCHAR *image = (const WCHAR *)((const char *)(info + 1) + info->curdir_len + info->dllpath_len);
++    SIZE_T len = info->imagepath_len / sizeof(WCHAR);
++    char *image_a, *steam_id;
++
++    *image_ret = *cmdline_ret = NULL;
++    if (!getenv( "FREEQUAY_COMPAT_FILES" ) || !(image_a = malloc( len * 3 + 1 ))) return;
++    image_a[ntdll_wcstoumbs( image, len, image_a, len * 3, FALSE )] = 0;
++    if (!(steam_id = freequay_get_env( *env, *pos, steamappidW ))) steam_id = freequay_get_env( *env, *pos, steamgameidW );
++    if (freequay_init_rules( image_a, steam_id ))
++    {
++        freequay_apply_env( env, pos, size );
++        *cmdline_ret = freequay_edit_cmdline( image + len, info->cmdline_len / sizeof(WCHAR), image_a, steam_id,
++                                              env, pos, size, image_ret );
++    }
++    free( image_a );
++    free( steam_id );
++}
++
++/* Called in the forked process right before it executes the new program: environment rules
++ * also go into its Unix environment, for variables read before ntdll runs (ROSETTA_ADVERTISE_AVX
++ * is read by Rosetta when the program starts). */
++void freequay_spawn_env( const RTL_USER_PROCESS_PARAMETERS *params )
++{
++    SIZE_T len = params->ImagePathName.Length / sizeof(WCHAR), env_len = 0;
++    char *image, *steam_id;
++    unsigned int i;
++    char *eq;
++
++    if (!getenv( "FREEQUAY_COMPAT_FILES" ) || !params->Environment || !(image = malloc( len * 3 + 1 ))) return;
++    image[ntdll_wcstoumbs( params->ImagePathName.Buffer, len, image, len * 3, FALSE )] = 0;
++    while (params->Environment[env_len]) env_len += wcslen( params->Environment + env_len ) + 1;
++    if (!(steam_id = freequay_get_env( params->Environment, env_len, steamappidW )))
++        steam_id = freequay_get_env( params->Environment, env_len, steamgameidW );
++    if (freequay_init_rules( image, steam_id ))
++    {
++        for (i = 0; i < freequay_rules.env_count; i++)
++        {
++            if (!(eq = strchr( freequay_rules.env[i], '=' ))) continue;
++            *eq = 0;
++            if (eq[1]) setenv( freequay_rules.env[i], eq + 1, 1 );
++            else unsetenv( freequay_rules.env[i] );
++            *eq = '=';
++        }
++    }
++    free( image );
++    free( steam_id );
++}
++
+ /*************************************************************************
+  *		build_initial_params
+  *
+@@ -1894,11 +2185,16 @@
+     WCHAR *curdir = get_initial_directory();
+     UNICODE_STRING nt_name;
+     NTSTATUS status;
++    /* freequay: rules for the program named on the wine command line */
++    char *freequay_exe = main_argv[1] ? strdup( main_argv[1] ) : NULL;
++    const char *freequay_steam = getenv( "SteamAppId" ) ? getenv( "SteamAppId" ) : getenv( "SteamGameId" );
+ 
+     if (NtCurrentTeb64()) NtCurrentTeb64()->TlsSlots[WOW64_TLS_FILESYSREDIR] = TRUE;
+ 
+     /* store the initial PATH value */
+     path = get_env_var( env, env_pos, pathW, 4 );
++    if (freequay_exe && getenv( "FREEQUAY_COMPAT_FILES" ) && freequay_init_rules( freequay_exe, freequay_steam ))
++        freequay_apply_env( &env, &env_pos, &env_size );
+     add_dynamic_environment( &env, &env_pos, &env_size );
+     add_registry_environment( &env, &env_pos, &env_size );
+     bootstrap = get_env_var( env, env_pos, bootstrapW, ARRAY_SIZE(bootstrapW) );
+@@ -1955,6 +2251,17 @@
+ 
+     main_wargv = build_wargv( get_dos_path( nt_name.Buffer ));
+     cmdline = build_command_line( main_wargv );
++    if (freequay_rules.matched)
++    {
++        WCHAR *freequay_cmdline = freequay_edit_cmdline( cmdline, wcslen( cmdline ), freequay_exe, freequay_steam,
++                                                         NULL, NULL, NULL, NULL );
++        if (freequay_cmdline)
++        {
++            free( cmdline );
++            cmdline = freequay_cmdline;
++        }
++    }
++    free( freequay_exe );
+ 
+     TRACE( "image %s cmdline %s dir %s\n",
+            debugstr_w(main_wargv[0]), debugstr_w(cmdline), debugstr_w(curdir) );
+@@ -2012,6 +2319,7 @@
+     struct startup_info_data *info;
+     UNICODE_STRING nt_name;
+     USHORT machine;
++    WCHAR *freequay_image, *freequay_cmdline;
+ 
+     if (!startup_info_size)
+     {
+@@ -2036,12 +2344,15 @@
+     env = malloc( env_size * sizeof(WCHAR) );
+     memcpy( env, (char *)info + info_size, env_size * sizeof(WCHAR) );
+     env_pos = env_size - 1;
++    freequay_child_rules( info, &env, &env_pos, &env_size, &freequay_image, &freequay_cmdline );
+     add_dynamic_environment( &env, &env_pos, &env_size );
+     is_prefix_bootstrap = !!find_env_var( env, env_pos, bootstrapW, ARRAY_SIZE(bootstrapW) );
+     env[env_pos++] = 0;
+ 
+     size = (sizeof(*params)
+             + MAX_PATH * sizeof(WCHAR)  /* curdir */
++            + (freequay_image ? (wcslen( freequay_image ) + 1) * sizeof(WCHAR) : 0)
++            + (freequay_cmdline ? (wcslen( freequay_cmdline ) + 1) * sizeof(WCHAR) : 0)
+             + info->dllpath_len + sizeof(WCHAR)
+             + info->imagepath_len + sizeof(WCHAR)
+             + info->cmdline_len + sizeof(WCHAR)
+@@ -2084,8 +2395,21 @@
+     dst = params->CurrentDirectory.DosPath.Buffer + MAX_PATH;
+ 
+     if (info->dllpath_len) copy_unicode_string( &src, &dst, &params->DllPath, info->dllpath_len );
+-    copy_dos_path_string( &src, &dst, &params->ImagePathName, &nt_name, info->imagepath_len );
+-    copy_unicode_string( &src, &dst, &params->CommandLine, info->cmdline_len );
++    if (freequay_image)  /* freequay: rule exe= starts another program */
++    {
++        WCHAR *ptr = freequay_image;
++        copy_dos_path_string( &ptr, &dst, &params->ImagePathName, &nt_name, wcslen( freequay_image ) * sizeof(WCHAR) );
++        src += info->imagepath_len / sizeof(WCHAR);
++    }
++    else copy_dos_path_string( &src, &dst, &params->ImagePathName, &nt_name, info->imagepath_len );
++    if (freequay_cmdline)  /* freequay: rules args=, argdel=, exe= */
++    {
++        put_unicode_string( freequay_cmdline, &dst, &params->CommandLine );
++        src += info->cmdline_len / sizeof(WCHAR);
++    }
++    else copy_unicode_string( &src, &dst, &params->CommandLine, info->cmdline_len );
++    free( freequay_image );
++    free( freequay_cmdline );
+     copy_unicode_string( &src, &dst, &params->WindowTitle, info->title_len );
+     copy_unicode_string( &src, &dst, &params->Desktop, info->desktop_len );
+     copy_unicode_string( &src, &dst, &params->ShellInfo, info->shellinfo_len );
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -384,13 +384,21 @@
+         dll_path_maxlen = path_len;
+ }
+ 
+-static void set_dll_path(void)
++/* freequay: winemac.drv reads CX_ACTIVE_GRAPHICS_BACKEND. Set it for every program, because
++ * children inherit the Unix environment of the program that started them. */
++static void set_active_backend( const char *name )
++{
++    if (name && *name) setenv( "CX_ACTIVE_GRAPHICS_BACKEND", strncmp( name, "d3dmetal", 8 ) ? name : "d3dmetal", 1 );
++}
++
++static void set_dll_path( const char *prio_path )
+ {
+     char *p, *path = getenv( "WINEDLLPATH" );
+-    /* freequay: paths in FREEQUAY_PRIORITY_DLLPATH are searched before the Wine dll dir,
+-     * so a graphics backend (D3DMetal, DXMT) can replace the builtin d3d11/dxgi.
+-     * Open counterpart of CrossOver calling prepend_dll_path(). */
+-    char *prio = getenv( "FREEQUAY_PRIORITY_DLLPATH" );
++    /* freequay: paths in prio_path are searched before the Wine dll dir, so a graphics backend
++     * (D3DMetal, DXMT, DXVK) can replace the builtin d3d11/dxgi. Open counterpart of CrossOver
++     * calling prepend_dll_path(). The bottle default comes from FREEQUAY_PRIORITY_DLLPATH, a rule
++     * for the program from freequay_set_backend(). */
++    char *prio = prio_path && *prio_path ? (char *)prio_path : NULL;
+     int i, count = 0;
+ 
+     if (path) for (p = path, count = 1; *p; p++) if (*p == ':') count++;
+@@ -417,6 +425,27 @@
+ 
+     for (i = 0; i < count; i++) dll_path_maxlen = max( dll_path_maxlen, strlen(dll_paths[i]) );
+     dll_paths[count] = NULL;
++}
++
++/* freequay: switch this program to the graphics backend a rule asks for (freequay.c). Every
++ * backend except wined3d needs its DLL directory in FREEQUAY_BACKEND_<name>. */
++void freequay_set_backend( const char *name )
++{
++    char var[96];
++    const char *dir;
++    unsigned int i;
++
++    snprintf( var, sizeof(var), "FREEQUAY_BACKEND_%s", name );
++    dir = getenv( var );
++    if (!(dir && *dir) && strcmp( name, "wined3d" ))
++    {
++        WARN( "backend %s is not installed\n", debugstr_a(name) );
++        return;
++    }
++    for (i = 0; dll_paths[i]; i++) if (dll_paths[i] != dll_dir) free( (char *)dll_paths[i] );
++    free( dll_paths );
++    set_dll_path( dir );
++    set_active_backend( name );
+ }
+ 
+ 
+@@ -504,7 +533,8 @@
+         wineloader = build_path( ntdll_dir, "wine" );
+     }
+ 
+-    set_dll_path();
++    set_dll_path( getenv( "FREEQUAY_PRIORITY_DLLPATH" ) );
++    set_active_backend( getenv( "FREEQUAY_DEFAULT_BACKEND" ) );
+     set_system_dll_path();
+     set_home_dir();
+     set_config_dir();
+--- a/dlls/ntdll/unix/process.c
++++ b/dlls/ntdll/unix/process.c
+@@ -933,6 +933,7 @@
+                 }
+             }
+ 
++            freequay_spawn_env( params );  /* freequay: rules for the new program, see env.c */
+             exec_wineloader( argv, socketfd, pe_info, image_path_name_a );
+             _exit(1);
+         }
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -221,6 +221,30 @@
+ extern BOOL is_builtin_path( const UNICODE_STRING *path, WORD *machine );
+ extern NTSTATUS load_main_exe( UNICODE_STRING *nt_name, USHORT load_machine, void **module );
+ extern NTSTATUS load_start_exe( UNICODE_STRING *nt_name, void **module );
++
++/* freequay: compatibility rules per program, see freequay.c */
++#define FREEQUAY_MAX_ENTRIES 32
++struct freequay_rules
++{
++    BOOL matched;
++    char *backend;
++    char *env[FREEQUAY_MAX_ENTRIES];
++    unsigned int env_count;
++    char *dll[FREEQUAY_MAX_ENTRIES];
++    unsigned int dll_count;
++    char *args;
++    BOOL args_steam;
++    char *argdel[FREEQUAY_MAX_ENTRIES];
++    unsigned int argdel_count;
++    BOOL argdel_steam;
++    char *exe;
++    BOOL exe_steam;
++};
++extern struct freequay_rules freequay_rules;
++extern BOOL freequay_init_rules( const char *image, const char *steam_id );
++extern BOOL freequay_tail_match( const char *path, size_t path_len, const char *key, size_t key_len );
++extern void freequay_set_backend( const char *name );
++extern void freequay_spawn_env( const RTL_USER_PROCESS_PARAMETERS *params );
+ extern ULONG_PTR redirect_arm64ec_rva( void *module, ULONG_PTR rva, const IMAGE_ARM64EC_METADATA *metadata );
+ extern void start_server( BOOL debug );
+ 
+--- /dev/null
++++ b/dlls/ntdll/unix/freequay.c
+@@ -0,0 +1,228 @@
++/*
++ * freequay: compatibility rules per program
++ *
++ * Open counterpart of CrossOver's closed cxcompatdb.so. The rules come from text files listed
++ * in FREEQUAY_COMPAT_FILES (separated by colons; for every setting the first file that has it
++ * wins). One rule per line:
++ *
++ *     <key> TAB <directive> [TAB <directive> ...]
++ *
++ * Keys:
++ *     steam:<appid>     the game Steam started (SteamAppId or SteamGameId in its environment)
++ *     exe:<name.exe>    a program file name, or exe:\path\tail.exe for the end of its path
++ *
++ * Directives applied when a process starts:
++ *     backend=<name>        graphics backend, DLLs from the directory in FREEQUAY_BACKEND_<name>
++ *     env=<NAME>=<value>    environment variable; an empty value removes it
++ *     dll=<name>=<order>    DLL load order (n, b, n,b, b,n; empty disables the DLL)
++ *     args=<text>           appended to the command line
++ *     argdel=<text>         removed from the command line
++ *     exe=<from>><to>       start <to> instead of the program whose path ends in <from>
++ *
++ * Command line directives from a steam: key only apply to the first program of the game that
++ * runs from steamapps\common, not to installers, crash handlers or programs the game starts.
++ * Other directives (verb=, reg=, winver= ...) are for "freequay fix" and are skipped here.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#if 0
++#pragma makedep unix
++#endif
++
++#include <fcntl.h>
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <strings.h>
++#include <unistd.h>
++
++#include "ntstatus.h"
++#define WIN32_NO_STATUS
++#include "windef.h"
++#include "winternl.h"
++#include "unix_private.h"
++
++#include "wine/debug.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(freequay);
++
++struct freequay_rules freequay_rules;
++
++static char lower( char c )
++{
++    if (c == '/') return '\\';
++    return (c >= 'A' && c <= 'Z') ? c + 'a' - 'A' : c;
++}
++
++/* does the program path end in key, at a path separator? */
++BOOL freequay_tail_match( const char *path, size_t path_len, const char *key, size_t key_len )
++{
++    size_t i;
++
++    if (!key_len || key_len > path_len) return FALSE;
++    for (i = 0; i < key_len; i++)
++        if (lower( path[path_len - key_len + i] ) != lower( key[i] )) return FALSE;
++    if (lower( key[0] ) == '\\' || path_len == key_len) return TRUE;
++    return lower( path[path_len - key_len - 1] ) == '\\' || path[path_len - key_len - 1] == ':';
++}
++
++static char *strndup_( const char *str, size_t len )
++{
++    char *ret = malloc( len + 1 );
++    if (!ret) return NULL;
++    memcpy( ret, str, len );
++    ret[len] = 0;
++    return ret;
++}
++
++/* add NAME=value to a list unless NAME is already there */
++static void add_named( char **list, unsigned int *count, const char *str, size_t len )
++{
++    const char *eq = memchr( str, '=', len );
++    size_t name_len = eq ? eq - str : len;
++    unsigned int i;
++
++    if (!name_len || *count >= FREEQUAY_MAX_ENTRIES) return;
++    for (i = 0; i < *count; i++)
++        if (!strncasecmp( list[i], str, name_len ) && list[i][name_len] == '=') return;
++    list[(*count)++] = strndup_( str, len );
++}
++
++static void add_directive( const char *dir, size_t len, BOOL steam )
++{
++    struct freequay_rules *r = &freequay_rules;
++
++#define IS(name) (len >= sizeof(name) - 1 && !memcmp( dir, name, sizeof(name) - 1 ))
++    if (IS( "backend=" ))
++    {
++        if (!r->backend) r->backend = strndup_( dir + 8, len - 8 );
++    }
++    else if (IS( "env=" )) add_named( r->env, &r->env_count, dir + 4, len - 4 );
++    else if (IS( "dll=" )) add_named( r->dll, &r->dll_count, dir + 4, len - 4 );
++    else if (IS( "args=" ))
++    {
++        if (!r->args)
++        {
++            r->args = strndup_( dir + 5, len - 5 );
++            r->args_steam = steam;
++        }
++    }
++    else if (IS( "argdel=" ))
++    {
++        if (r->argdel_count < FREEQUAY_MAX_ENTRIES && len > 7)
++        {
++            r->argdel[r->argdel_count++] = strndup_( dir + 7, len - 7 );
++            if (steam) r->argdel_steam = TRUE;
++        }
++    }
++    else if (IS( "exe=" ))
++    {
++        if (!r->exe && memchr( dir, '>', len ))
++        {
++            r->exe = strndup_( dir + 4, len - 4 );
++            r->exe_steam = steam;
++        }
++    }
++#undef IS
++}
++
++static char *read_file( const char *name, size_t *size )
++{
++    char *buf = NULL, *tmp;
++    size_t alloc = 0;
++    ssize_t ret;
++    int fd;
++
++    *size = 0;
++    if ((fd = open( name, O_RDONLY )) == -1) return NULL;
++    for (;;)
++    {
++        if (*size + 65536 > alloc)
++        {
++            alloc = alloc ? alloc * 2 : 262144;
++            if (!(tmp = realloc( buf, alloc + 1 ))) break;
++            buf = tmp;
++        }
++        if ((ret = read( fd, buf + *size, alloc - *size )) <= 0) break;
++        *size += ret;
++    }
++    close( fd );
++    if (buf) buf[*size] = 0;
++    return buf;
++}
++
++static void scan_file( const char *name, const char *image, size_t image_len, const char *steam_id )
++{
++    size_t size, id_len = steam_id ? strlen( steam_id ) : 0;
++    char *buf = read_file( name, &size ), *line, *next, *end, *tab, *dir;
++    BOOL steam;
++
++    if (!buf) return;
++    for (line = buf; line < buf + size; line = next)
++    {
++        if (!(end = memchr( line, '\n', buf + size - line ))) end = buf + size;
++        next = end + 1;
++        if (end > line && end[-1] == '\r') end--;
++        if (line == end || *line == '#' || !(tab = memchr( line, '\t', end - line ))) continue;
++
++        if (tab - line > 6 && !memcmp( line, "steam:", 6 ))
++        {
++            if (!id_len || (size_t)(tab - line - 6) != id_len || memcmp( line + 6, steam_id, id_len )) continue;
++            steam = TRUE;
++        }
++        else if (tab - line > 4 && !memcmp( line, "exe:", 4 ))
++        {
++            if (!freequay_tail_match( image, image_len, line + 4, tab - line - 4 )) continue;
++            steam = FALSE;
++        }
++        else continue;
++
++        for (dir = tab + 1; dir < end; dir = tab + 1)
++        {
++            if (!(tab = memchr( dir, '\t', end - dir ))) tab = end;
++            if (tab > dir) add_directive( dir, tab - dir, steam );
++        }
++        freequay_rules.matched = TRUE;
++    }
++    free( buf );
++}
++
++/***********************************************************************
++ *           freequay_init_rules
++ *
++ * Collect the rules for the program at image (Unix or NT path); steam_id may be NULL.
++ */
++BOOL freequay_init_rules( const char *image, const char *steam_id )
++{
++    const char *files = getenv( "FREEQUAY_COMPAT_FILES" ), *p, *colon;
++    char *name;
++
++    memset( &freequay_rules, 0, sizeof(freequay_rules) );  /* a forked process starts over */
++    if (!files || !image) return FALSE;
++    for (p = files; *p; p = *colon ? colon + 1 : colon)
++    {
++        if (!(colon = strchr( p, ':' ))) colon = p + strlen( p );
++        if (colon == p || !(name = strndup_( p, colon - p ))) continue;
++        scan_file( name, image, strlen( image ), steam_id );
++        free( name );
++    }
++    if (freequay_rules.matched)
++        TRACE( "%s (steam %s): backend %s, %u env, %u dll, args %s, exe %s\n", debugstr_a(image),
++               debugstr_a(steam_id), debugstr_a(freequay_rules.backend), freequay_rules.env_count,
++               freequay_rules.dll_count, debugstr_a(freequay_rules.args), debugstr_a(freequay_rules.exe) );
++    return freequay_rules.matched;
++}

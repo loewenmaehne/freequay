@@ -1,0 +1,27 @@
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -387,12 +387,24 @@
+ static void set_dll_path(void)
+ {
+     char *p, *path = getenv( "WINEDLLPATH" );
++    /* freequay: paths in FREEQUAY_PRIORITY_DLLPATH are searched before the Wine dll dir,
++     * so a graphics backend (D3DMetal, DXMT) can replace the builtin d3d11/dxgi.
++     * Open counterpart of CrossOver calling prepend_dll_path(). */
++    char *prio = getenv( "FREEQUAY_PRIORITY_DLLPATH" );
+     int i, count = 0;
+ 
+     if (path) for (p = path, count = 1; *p; p++) if (*p == ':') count++;
++    if (prio) for (p = prio, count++; *p; p++) if (*p == ':') count++;
+ 
+     dll_paths = malloc( (count + 2) * sizeof(*dll_paths) );
+     count = 0;
++
++    if (prio)
++    {
++        prio = strdup(prio);
++        for (p = strtok( prio, ":" ); p; p = strtok( NULL, ":" )) dll_paths[count++] = strdup( p );
++        free( prio );
++    }
+ 
+     if (!build_dir) dll_paths[count++] = dll_dir;
+ 

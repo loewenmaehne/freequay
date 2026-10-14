@@ -1,0 +1,291 @@
+#!/bin/zsh
+# Freequay: launcher for the Wine build from CodeWeavers' CrossOver 26.3.0 sources.
+#
+#   freequay new <bottle>                          create a bottle
+#   freequay run <bottle> [options] <exe> [args]   start a Windows program
+#   freequay wine <bottle> <program> [args]        start a Wine program (winecfg, regedit, cmd ...)
+#   freequay set <bottle> <key> <value>            change a bottle default
+#   freequay app <bottle> [<program.exe> <backend|->]  set, delete or show graphics per program
+#   freequay rule <bottle> <key> <directive...|->  add or delete a rule of the bottle
+#   freequay info [<bottle>] <program.exe|steam:ID|title>  show all rules for a program
+#   freequay fix <bottle> [--list] [steam:ID ...]  one-time setup from the rules (winetricks,
+#                                                   registry, Windows version); all Steam games
+#                                                   without an ID
+#   freequay kill <bottle>                         stop all processes of the bottle
+#   freequay list                                  list bottles
+#
+# Options for run (override the bottle defaults):
+#   --backend d3dmetal|d3dmetal3|dxmt|dxvk|wined3d   graphics for all programs without a rule
+#                                                   (default: dxmt)
+#   --avx                             Rosetta reports AVX/AVX2 to the game
+#   --hud                             show the Metal performance HUD
+#   --debug                           keep Wine's debug output
+set -euo pipefail
+
+ROOT=${0:A:h:h}
+WINE_DIR=$ROOT/dist/wine
+BACKENDS=$ROOT/dist/backends
+BOTTLES="$HOME/Library/Application Support/freequay/Bottles"
+
+# Rules per program: the open counterpart of CrossOver's closed cxcompatdb. ntdll reads them
+# from these files whenever a program starts (patches/0005, format in compat/README.md); for
+# every setting the first file that has it wins. The bottle's own rules come first.
+COMPAT=$ROOT/compat
+COMPAT_FILES=(manual.txt applegamingwiki.txt protonfixes.txt proton.txt protondb.txt dxvk.txt)
+WINETRICKS=$ROOT/downloads/compat/winetricks-20260125
+
+die() { print -u2 -- "freequay: $*"; exit 1; }
+
+bottle_dir() {
+  [[ -n "${1:-}" ]] || die "bottle name missing"
+  print -r -- "$BOTTLES/$1"
+}
+
+conf_get() { # bottle-dir key default
+  local f="$1/freequay.conf" v=""
+  [[ -f $f ]] && v=$(sed -n "s/^$2=//p" "$f" | tail -1)
+  print -r -- "${v:-$3}"
+}
+
+conf_set() { # bottle-dir key value
+  local f="$1/freequay.conf"
+  touch "$f"
+  sed -i '' "/^$2=/d" "$f"
+  print -r -- "$2=$3" >> "$f"
+}
+
+check_backend() {
+  [[ $1 == (d3dmetal|d3dmetal3|dxmt|dxvk|wined3d) ]] || die "unknown backend: $1"
+}
+
+backend_dir() { # backend -> DLL directory; wined3d is Wine's own d3d and has none
+  case $1 in
+    d3dmetal|d3dmetal3) print -r -- "$BACKENDS/$1/lib/wine" ;;
+    dxmt|dxvk) print -r -- "$BACKENDS/$1" ;;
+  esac
+}
+
+compat_files() { # bottle-dir -> rule files, separated by colons
+  local f out="$1/compat.txt"
+  for f in $COMPAT_FILES; do out+=":$COMPAT/$f"; done
+  print -r -- "$out"
+}
+
+rule_key() { # program.exe or steam:ID -> key of a rule
+  case $1 in
+    steam:<->) print -r -- "$1" ;;
+    exe:?*) print -r -- "$1" ;;
+    *[$'\t'=\;]*|"") die "invalid program: $1" ;;
+    *) print -r -- "exe:$1" ;;
+  esac
+}
+
+rule_del() { # bottle-dir key [directive]: delete the rules of a key, only those with this directive
+  local f="$1/compat.txt"
+  [[ -f $f ]] || return 0
+  KEY="$2" DIR="${3:-}" awk -F'\t' '$1 != ENVIRON["KEY"] || (ENVIRON["DIR"] != "" && $0 !~ ("\t" ENVIRON["DIR"] "="))' "$f" > "$f.tmp"
+  mv "$f.tmp" "$f"
+}
+
+bottle_running() { # bottle-dir: is a wineserver running for the bottle?
+  local id
+  id=$(printf 'server-%x-%x' $(stat -f '%d %i' "$1"))
+  [[ -S /tmp/.wine-$UID/$id/socket ]]
+}
+
+# One-time setup from the rules (scripts/compat/fix.py). winetricks waits until every program
+# of the bottle has ended, so this only runs when nothing runs there.
+run_fix() { # bottle-dir [--list] [key ...]
+  local dir=$1; shift
+  setup_env "$dir" "$(conf_get "$dir" backend dxmt)" 0 0 0
+  if [[ ! -f $WINETRICKS ]]; then
+    mkdir -p "${WINETRICKS:h}"
+    curl -sfL -o "$WINETRICKS" "https://raw.githubusercontent.com/Winetricks/winetricks/${WINETRICKS##*-}/src/winetricks" ||
+      die "could not download winetricks"
+  fi
+  if [[ ${1:-} != --list ]] && bottle_running "$dir"; then
+    die "programs are still running in the bottle; stop them first (freequay kill ${dir:t})"
+  fi
+  python3 -I "$ROOT/scripts/compat/fix.py" "$dir" "$WINE_DIR/bin/wine" "$WINETRICKS" "$FREEQUAY_COMPAT_FILES" "$@"
+}
+
+setup_env() { # bottle-dir backend avx hud debug
+  local dir=$1 backend=$2 b d
+  export WINEPREFIX="$dir"
+  export DYLD_FALLBACK_LIBRARY_PATH="$ROOT/deps/lib:/usr/lib"
+  export FREEQUAY_LIBRARY_PATH=$DYLD_FALLBACK_LIBRARY_PATH  # survives system binaries (fix.py)
+  export WINEMSYNC=1
+  export MVK_CONFIG_LOG_LEVEL=${MVK_CONFIG_LOG_LEVEL:-1}
+  [[ $5 == 1 ]] || export WINEDEBUG=${WINEDEBUG:--all}
+  check_backend "$backend"
+  d=$(backend_dir "$backend")
+  case $backend in
+    # d3dmetal = Apple's D3DMetal 4.0 beta 2, d3dmetal3 = 3.0 (scripts/install-d3dmetal.sh)
+    d3dmetal|d3dmetal3) [[ -d $d ]] || die "$backend is missing, run scripts/install-d3dmetal.sh first" ;;
+    dxmt) [[ -d $d ]] || die "DXMT is missing, run scripts/install-dxmt.sh first" ;;
+    # DirectX 9 and 11 over Vulkan and MoltenVK (scripts/build-dxvk.sh)
+    dxvk) [[ -d $d ]] || die "DXVK is missing, run scripts/build-dxvk.sh first" ;;
+    # CodeWeavers switch wined3d on the Mac to Vulkan for DirectX 10/11 (CW HACK 18311); that
+    # works with their MoltenVK (scripts/build-moltenvk.sh). WINE_D3D_CONFIG=renderer=gl
+    # forces OpenGL.
+    wined3d) ;;
+  esac
+  # default for programs without a rule; ntdll sets CX_ACTIVE_GRAPHICS_BACKEND per program
+  export FREEQUAY_DEFAULT_BACKEND=$backend
+  export CX_ACTIVE_GRAPHICS_BACKEND=${backend/d3dmetal3/d3dmetal}
+  if [[ -n $d ]]; then export FREEQUAY_PRIORITY_DLLPATH=$d; else unset FREEQUAY_PRIORITY_DLLPATH; fi
+  # offer every installed backend to the rules per program
+  for b in d3dmetal d3dmetal3 dxmt dxvk; do
+    d=$(backend_dir $b)
+    [[ -d $d ]] || continue
+    export "FREEQUAY_BACKEND_$b=$d"
+    backend_stubs "$dir" "$d"
+  done
+  export FREEQUAY_COMPAT_FILES="$(compat_files "$dir")"
+  [[ $3 == 1 ]] && export ROSETTA_ADVERTISE_AVX=1
+  [[ $4 == 1 ]] && export MTL_HUD_ENABLED=1
+  return 0
+}
+
+# Wine only loads a builtin DLL when the bottle has a placeholder for it. DLLs that only the
+# backend brings (winemetal.dll, nvapi64.dll ...) are copied in once; when loading, Wine then
+# takes the version from the backend directory together with its Unix part.
+backend_stubs() { # bottle-dir backend-dir
+  local arch target f
+  for arch target in x86_64 system32 i386 syswow64; do
+    [[ -d "$1/drive_c/windows/$target" ]] || continue  # a new bottle gets them at its first run
+    for f in "$2/$arch-windows"/*.dll(N); do
+      [[ -e "$1/drive_c/windows/$target/${f:t:l}" || -e "$1/drive_c/windows/$target/${f:t}" ]] ||
+        cp "$f" "$1/drive_c/windows/$target/${f:t:l}"
+    done
+  done
+}
+
+cmd=${1:-}; shift || true
+case $cmd in
+  new)
+    dir=$(bottle_dir "${1:-}")
+    [[ -e $dir ]] && die "bottle exists already: $dir"
+    mkdir -p "$dir"
+    setup_env "$dir" wined3d 0 0 0
+    # Wine installs Wine Mono (.NET) silently from dist/wine/share/wine/mono when
+    # scripts/install-mono.sh put it there. Gecko (HTML) stays off, otherwise Wine asks for the
+    # download in a dialog.
+    msi=($WINE_DIR/share/wine/mono/wine-mono-*-x86.msi(N))
+    overrides="mshtml="; (( $#msi )) || overrides="mscoree,mshtml="
+    WINEDLLOVERRIDES=$overrides "$WINE_DIR/bin/wine" wineboot --init
+    "$WINE_DIR/bin/wineserver" --wait
+    conf_set "$dir" backend dxmt
+    conf_set "$dir" avx 0
+    print -- "bottle created: $dir"
+    ;;
+  run|wine)
+    dir=$(bottle_dir "${1:-}"); shift
+    [[ -d $dir ]] || die "no bottle at $dir"
+    backend=$(conf_get "$dir" backend dxmt); avx=$(conf_get "$dir" avx 0); hud=0; debug=0
+    while [[ ${1:-} == --* ]]; do
+      case $1 in
+        --backend) backend=$2; shift 2 ;;
+        --avx) avx=1; shift ;;
+        --hud) hud=1; shift ;;
+        --debug) debug=1; shift ;;
+        *) die "unknown option: $1" ;;
+      esac
+    done
+    [[ -n "${1:-}" ]] || die "program missing"
+    # before Steam starts, catch up on the setup of installed games (freequay fix)
+    if [[ $cmd == run && ${1:t:l} == steam.exe ]] && ! bottle_running "$dir"; then
+      run_fix "$dir" || print -u2 "freequay: setup incomplete, starting Steam anyway"
+    fi
+    setup_env "$dir" "$backend" "$avx" "$hud" "$debug"
+    # Rosetta reads ROSETTA_ADVERTISE_AVX only at exec; for child processes ntdll sets it itself
+    if [[ $cmd == run ]] && grep -qi -- "^exe:[^"$'\t'"]*${1:t}"$'\t'".*env=ROSETTA_ADVERTISE_AVX=1" \
+        ${(s.:.)FREEQUAY_COMPAT_FILES} 2>/dev/null; then
+      export ROSETTA_ADVERTISE_AVX=1
+    fi
+    if [[ $cmd == run && -f ${1:a} ]]; then
+      # start from the program's directory, many games expect that
+      exe=${1:a}; shift
+      cd "${exe:h}"
+      exec "$WINE_DIR/bin/wine" "$exe" "$@"
+    fi
+    exec "$WINE_DIR/bin/wine" "$@"
+    ;;
+  set)
+    dir=$(bottle_dir "${1:-}")
+    [[ -d $dir ]] || die "no bottle at $dir"
+    [[ -n "${2:-}" && -n "${3:-}" ]] || die "usage: freequay set <bottle> <key> <value>"
+    conf_set "$dir" "$2" "$3"
+    ;;
+  app)
+    dir=$(bottle_dir "${1:-}")
+    [[ -d $dir ]] || die "no bottle at $dir"
+    if [[ -z "${2:-}" ]]; then
+      print "rules of the bottle ($dir/compat.txt):"
+      [[ -f $dir/compat.txt ]] && sed 's/^/  /' "$dir/compat.txt"
+      print "rules from open sources: freequay info $1 <program.exe|steam:ID>"
+      exit 0
+    fi
+    [[ -n "${3:-}" ]] || die "usage: freequay app <bottle> <program.exe|steam:ID> <backend|->"
+    key=$(rule_key "$2")
+    [[ $3 == - ]] || check_backend "$3"
+    rule_del "$dir" "$key" backend
+    [[ $3 == - ]] || print -r -- "$key"$'\t'"backend=$3" >> "$dir/compat.txt"
+    ;;
+  rule)
+    dir=$(bottle_dir "${1:-}")
+    [[ -d $dir ]] || die "no bottle at $dir"
+    [[ -n "${2:-}" && -n "${3:-}" ]] || die "usage: freequay rule <bottle> <program.exe|steam:ID> <directive...|->"
+    key=$(rule_key "$2"); shift 2
+    if [[ $1 == - ]]; then rule_del "$dir" "$key"; exit 0; fi
+    for d in "$@"; do
+      [[ $d == (backend|env|dll|args|argdel|exe|verb|reg|winver|ini|note)=* && $d != *$'\t'* ]] ||
+        die "unknown directive: $d"
+      [[ $d != backend=* ]] || check_backend "${d#backend=}"
+    done
+    print -r -- "$key"$'\t'"${(pj:\t:)@}" >> "$dir/compat.txt"
+    ;;
+  info)
+    if [[ -n "${2:-}" ]]; then dir=$(bottle_dir "$1"); shift; else dir=; fi
+    [[ -n "${1:-}" ]] || die "usage: freequay info [<bottle>] <program.exe|steam:ID|title>"
+    files=(); [[ -n $dir && -f $dir/compat.txt ]] && files+=("$dir/compat.txt")
+    for f in $COMPAT_FILES; do [[ -f $COMPAT/$f ]] && files+=("$COMPAT/$f"); done
+    query=$1
+    if [[ $query == <-> || $query == steam:<-> ]]; then
+      ids=(${query#steam:})
+    elif [[ $query == *.exe ]]; then
+      ids=()
+    else
+      # title: Steam app IDs from compat/titles.tsv
+      ids=(${(f)"$({ grep -i -- "$query" "$COMPAT/titles.tsv" 2>/dev/null || true; } | head -20 | cut -f1)"})
+      { grep -i -- "$query" "$COMPAT/titles.tsv" 2>/dev/null || true; } | head -20 | sed 's/^/  /'
+    fi
+    # grep often finds nothing; with pipefail that must not end the command
+    for f in $files; do
+      if (( $#ids )); then
+        for id in $ids; do { grep -- "^steam:$id"$'\t' "$f" || true; } | sed "s|^|${f:t}: |"; done
+      else
+        { grep -i -- "^exe:[^"$'\t'"]*${query##*\\}"$'\t' "$f" || true; } | sed "s|^|${f:t}: |"
+      fi
+    done
+    for id in $ids; do
+      { grep -- "^steam:$id"$'\t' "$COMPAT/notes.tsv" 2>/dev/null || true; } | cut -f2- | sed "s/^/  note steam:$id: /"
+    done
+    ;;
+  fix)
+    dir=$(bottle_dir "${1:-}"); shift
+    [[ -d $dir ]] || die "no bottle at $dir"
+    run_fix "$dir" "$@"
+    ;;
+  kill)
+    dir=$(bottle_dir "${1:-}")
+    WINEPREFIX="$dir" "$WINE_DIR/bin/wineserver" -k || true
+    ;;
+  list)
+    [[ -d $BOTTLES ]] && ls -1 "$BOTTLES" || true
+    ;;
+  *)
+    sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
+    [[ -z $cmd ]] || exit 1
+    ;;
+esac

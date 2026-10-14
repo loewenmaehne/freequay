@@ -1,0 +1,76 @@
+--- a/dlls/cfgmgr32/main.c
++++ b/dlls/cfgmgr32/main.c
+@@ -20,6 +20,7 @@
+ #include <assert.h>
+ 
+ #include "wine/debug.h"
++#include "wine/list.h"
+ #include "wine/rbtree.h"
+ #include "winreg.h"
+ #include "winternl.h"
+@@ -74,11 +75,24 @@
+ 
+ struct cm_notify_context
+ {
++    struct list entry;
+     HDEVNOTIFY notify;
+     void *user_data;
+     PCM_NOTIFY_CALLBACK callback;
+ };
+ 
++/* freequay: live registrations. Windows rejects unknown handles in CM_Unregister_Notification;
++ * Steam's steamclient64.dll passes a stale one when a game exits, which crashed in sechost. */
++static struct list cm_notify_contexts = LIST_INIT( cm_notify_contexts );
++static CRITICAL_SECTION cm_notify_cs;
++static CRITICAL_SECTION_DEBUG cm_notify_cs_debug =
++{
++    0, 0, &cm_notify_cs,
++    { &cm_notify_cs_debug.ProcessLocksList, &cm_notify_cs_debug.ProcessLocksList },
++      0, 0, { (DWORD_PTR)(__FILE__ ": cm_notify_cs") }
++};
++static CRITICAL_SECTION cm_notify_cs = { &cm_notify_cs_debug, -1, 0, 0, 0, 0 };
++
+ CALLBACK DWORD devnotify_callback( HANDLE handle, DWORD flags, DEV_BROADCAST_HDR *header )
+ {
+     struct cm_notify_context *ctx = handle;
+@@ -219,6 +233,9 @@
+         default: return CR_FAILURE;
+         }
+     }
++    EnterCriticalSection( &cm_notify_cs );
++    list_add_tail( &cm_notify_contexts, &ctx->entry );
++    LeaveCriticalSection( &cm_notify_cs );
+     *notify_handle = ctx;
+     return CR_SUCCESS;
+ }
+@@ -242,16 +259,26 @@
+  */
+ CONFIGRET WINAPI CM_Unregister_Notification( HCMNOTIFICATION notify )
+ {
+-    struct cm_notify_context *ctx = notify;
++    struct cm_notify_context *ctx;
+ 
+     TRACE( "(%p)\n", notify );
+ 
+     if (!notify) return CR_INVALID_DATA;
+ 
+-    I_ScUnregisterDeviceNotification( ctx->notify );
+-    free( ctx );
++    EnterCriticalSection( &cm_notify_cs );
++    LIST_FOR_EACH_ENTRY( ctx, &cm_notify_contexts, struct cm_notify_context, entry )
++    {
++        if (ctx != notify) continue;
++        list_remove( &ctx->entry );
++        LeaveCriticalSection( &cm_notify_cs );
++        I_ScUnregisterDeviceNotification( ctx->notify );
++        free( ctx );
++        return CR_SUCCESS;
++    }
++    LeaveCriticalSection( &cm_notify_cs );
+ 
+-    return CR_SUCCESS;
++    WARN( "unknown handle %p\n", notify );
++    return CR_INVALID_DATA;
+ }
+ 
+ /***********************************************************************

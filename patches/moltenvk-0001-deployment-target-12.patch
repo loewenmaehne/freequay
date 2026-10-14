@@ -1,0 +1,80 @@
+--- a/ExternalDependencies.xcodeproj/project.pbxproj	2026-10-13 17:44:18
++++ b/ExternalDependencies.xcodeproj/project.pbxproj	2026-10-13 17:44:18
+@@ -7236,7 +7236,7 @@
+ 				GCC_WARN_UNUSED_VARIABLE = NO;
+ 				IPHONEOS_DEPLOYMENT_TARGET = 13.0;
+ 				MACH_O_TYPE = staticlib;
+-				MACOSX_DEPLOYMENT_TARGET = 10.15;
++				MACOSX_DEPLOYMENT_TARGET = 12.0;
+ 				SKIP_INSTALL = YES;
+ 				TVOS_DEPLOYMENT_TARGET = 13.0;
+ 			};
+@@ -7286,7 +7286,7 @@
+ 				GCC_WARN_UNUSED_VARIABLE = NO;
+ 				IPHONEOS_DEPLOYMENT_TARGET = 13.0;
+ 				MACH_O_TYPE = staticlib;
+-				MACOSX_DEPLOYMENT_TARGET = 10.15;
++				MACOSX_DEPLOYMENT_TARGET = 12.0;
+ 				SKIP_INSTALL = YES;
+ 				TVOS_DEPLOYMENT_TARGET = 13.0;
+ 				VALIDATE_PRODUCT = YES;
+--- a/MoltenVK/MoltenVK.xcodeproj/project.pbxproj	2026-10-13 17:44:18
++++ b/MoltenVK/MoltenVK.xcodeproj/project.pbxproj	2026-10-13 17:44:18
+@@ -2693,7 +2693,7 @@
+ 					"\"${BUILT_PRODUCTS_DIR}\"",
+ 				);
+ 				IPHONEOS_DEPLOYMENT_TARGET = 13.0;
+-				MACOSX_DEPLOYMENT_TARGET = 10.15;
++				MACOSX_DEPLOYMENT_TARGET = 12.0;
+ 				MARKETING_VERSION = "${CURRENT_PROJECT_VERSION}";
+ 				MTL_ENABLE_DEBUG_INFO = YES;
+ 				PRELINK_LIBS = "${CONFIGURATION_BUILD_DIR}/libMoltenVKShaderConverter.a";
+@@ -2766,7 +2766,7 @@
+ 					"\"${BUILT_PRODUCTS_DIR}\"",
+ 				);
+ 				IPHONEOS_DEPLOYMENT_TARGET = 13.0;
+-				MACOSX_DEPLOYMENT_TARGET = 10.15;
++				MACOSX_DEPLOYMENT_TARGET = 12.0;
+ 				MARKETING_VERSION = "${CURRENT_PROJECT_VERSION}";
+ 				MTL_ENABLE_DEBUG_INFO = NO;
+ 				PRELINK_LIBS = "${CONFIGURATION_BUILD_DIR}/libMoltenVKShaderConverter.a";
+--- a/MoltenVKShaderConverter/MoltenVKShaderConverter.xcodeproj/project.pbxproj	2026-10-13 17:44:18
++++ b/MoltenVKShaderConverter/MoltenVKShaderConverter.xcodeproj/project.pbxproj	2026-10-13 17:44:18
+@@ -735,7 +735,7 @@
+ 				);
+ 				IPHONEOS_DEPLOYMENT_TARGET = 13.0;
+ 				MACH_O_TYPE = staticlib;
+-				MACOSX_DEPLOYMENT_TARGET = 10.15;
++				MACOSX_DEPLOYMENT_TARGET = 12.0;
+ 				PRODUCT_NAME = MoltenVKShaderConverter;
+ 				SKIP_INSTALL = YES;
+ 				TVOS_DEPLOYMENT_TARGET = 13.0;
+@@ -796,7 +796,7 @@
+ 				);
+ 				IPHONEOS_DEPLOYMENT_TARGET = 13.0;
+ 				MACH_O_TYPE = staticlib;
+-				MACOSX_DEPLOYMENT_TARGET = 10.15;
++				MACOSX_DEPLOYMENT_TARGET = 12.0;
+ 				PRODUCT_NAME = MoltenVKShaderConverter;
+ 				SKIP_INSTALL = YES;
+ 				TVOS_DEPLOYMENT_TARGET = 13.0;
+--- a/Demos/Cube/Cube.xcodeproj/project.pbxproj	2026-10-13 17:44:18
++++ b/Demos/Cube/Cube.xcodeproj/project.pbxproj	2026-10-13 17:44:18
+@@ -462,7 +462,7 @@
+ 					"@executable_path/../Frameworks",
+ 					"@executable_path/../Frameworks/MoltenVK.framework",
+ 				);
+-				MACOSX_DEPLOYMENT_TARGET = 10.15;
++				MACOSX_DEPLOYMENT_TARGET = 12.0;
+ 				PRODUCT_NAME = Cube;
+ 				PROVISIONING_PROFILE_SPECIFIER = "";
+ 				SDKROOT = macosx;
+@@ -489,7 +489,7 @@
+ 					"@executable_path/../Frameworks",
+ 					"@executable_path/../Frameworks/MoltenVK.framework",
+ 				);
+-				MACOSX_DEPLOYMENT_TARGET = 10.15;
++				MACOSX_DEPLOYMENT_TARGET = 12.0;
+ 				PRODUCT_NAME = Cube;
+ 				PROVISIONING_PROFILE_SPECIFIER = "";
+ 				SDKROOT = macosx;

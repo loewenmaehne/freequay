@@ -1,0 +1,9 @@
+downloads/
+sources/
+build/
+deps/
+dist/
+tools/
+logs/
+.DS_Store
+__pycache__/
