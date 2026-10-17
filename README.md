@@ -6,7 +6,7 @@ A quay is where ships come ashore; here Windows games land on your Mac, for free
 
 Freequay is not affiliated with, endorsed by or supported by CodeWeavers or Apple. CrossOver is a trademark of CodeWeavers, Inc. CodeWeavers publish the sources this builds on and do most of the work on Wine for the Mac; if you want something that just works, with support, buy CrossOver.
 
-Releases come as a ready-made archive (see Install); you can also build it yourself. Apple's D3DMetal is in neither: you download it from Apple yourself if you want it.
+Releases come as a ready-made archive with a small app that starts Windows programs without Terminal (see Install); you can also build it yourself. Apple's D3DMetal is in neither: you download it from Apple yourself if you want it.
 
 ## What is in it
 
@@ -19,30 +19,34 @@ Releases come as a ready-made archive (see Install); you can also build it yours
   - `d3dmetal` and `d3dmetal3`: Apple's D3DMetal from the Game Porting Toolkit 4.0 beta 2 and 3.0, Direct3D 11 and 12. Only if you download it from Apple yourself; Apple's license applies.
 - Wine Mono from WineHQ for .NET programs; every new bottle gets it. The release archive leaves it out, the first `freequay new` downloads it.
 - Rules per program: the open counterpart of CrossOver's closed compatibility database, filled from AppleGamingWiki, umu-protonfixes, Proton, ProtonDB and DXVK (see below).
-- `scripts/freequay`, a small launcher for bottles.
+- `Freequay.app`, one window that starts Windows programs without Terminal, and `scripts/freequay`, the launcher for bottles that it calls.
 
 ## What is not in it
 
-Nothing from the CrossOver app itself: no user interface, no CrossTie installers, no D3DMetal from CrossOver and not CodeWeavers' compatibility database. GStreamer is not built yet, so games that play videos through Media Foundation may show black videos.
+Nothing from the CrossOver app itself: not its user interface, no CrossTie installers, no D3DMetal from CrossOver and not CodeWeavers' compatibility database. GStreamer is not built yet, so games that play videos through Media Foundation may show black videos.
 
 ## Install
 
 You need an Apple Silicon Mac with Rosetta 2 (`softwareupdate --install-rosetta` installs it) and about 1.5 GB of disk space for Freequay and a first bottle; Steam takes another 1.5 GB, plus your games. No Xcode, no Homebrew, no build. Tested on a MacBook Air M1 with 16 GB and macOS 27.0.1.
 
+Without Terminal: download `freequay-0.2.0-macos.tar.xz` from the [release page](https://github.com/loewenmaehne/freequay/releases/latest), double-click it in Finder to unpack it and open `Freequay.app` in the folder `freequay-0.2.0`. The app is not notarized by Apple, so macOS refuses it the first time: open System Settings, Privacy & Security, click Open Anyway next to the note about Freequay and confirm. After that it opens normally. macOS quarantines everything unpacked from a browser download and would also stop the unsigned `wine`; the app lifts that quarantine for its own folder when it starts.
+
+With Terminal:
+
 ```bash
 cd ~
-curl -LO https://github.com/loewenmaehne/freequay/releases/download/v0.1.0/freequay-0.1.0-macos.tar.xz
-tar -xf freequay-0.1.0-macos.tar.xz
-cd freequay-0.1.0
+curl -LO https://github.com/loewenmaehne/freequay/releases/download/v0.2.0/freequay-0.2.0-macos.tar.xz
+tar -xf freequay-0.2.0-macos.tar.xz
+cd freequay-0.2.0
 scripts/freequay new games
 ```
 
-The folder can go anywhere, the launcher finds everything relative to itself. Bottles live outside it (see Use), so a newer release can simply replace the folder; install D3DMetal again after that.
+The folder can go anywhere: the launcher finds everything relative to itself, and the app finds the launcher next to itself. Bottles live outside it (see Use), so a newer release can simply replace the folder; install D3DMetal again after that.
 
-Downloaded with a browser instead of curl? Then macOS quarantines the archive and everything unpacked from it, by Finder or by `tar`, and Gatekeeper stops the unsigned `wine` with a dialog. Lift the quarantine once, after unpacking:
+Downloaded with a browser and not opened the app yet? Then macOS quarantines the archive and everything unpacked from it, by Finder or by `tar`, and Gatekeeper stops the unsigned `wine` with a dialog. Lift the quarantine once, after unpacking:
 
 ```bash
-xattr -dr com.apple.quarantine ~/freequay-0.1.0
+xattr -dr com.apple.quarantine ~/freequay-0.2.0
 ```
 
 The first `freequay new` downloads Wine Mono (82 MB) from WineHQ. `freequay fix`, which installs the runtime packages that rules ask for, needs python3 from the Command Line Tools (`xcode-select --install`), and many of those packages need `cabextract` (Homebrew); without them, Steam and games start without that setup. D3DMetal is installed as described under Build, `scripts/install-d3dmetal.sh` is in the archive too.
@@ -64,9 +68,11 @@ scripts/compat/update.sh      # rules from the open sources, optional: compat/ h
 
 D3DMetal: download "Evaluation environment for Windows games" from developer.apple.com, mount it and run `scripts/install-d3dmetal.sh "/Volumes/<volume>"`; pass `d3dmetal3` as the second argument for version 3.0.
 
-`scripts/package.sh 0.1.0` packs the build with the launcher, the rules and the license texts into `out/freequay-0.1.0-macos.tar.xz`, the release archive.
+`scripts/build-app.sh` builds `Freequay.app` into the root of the repository with swiftc from Xcode or the Command Line Tools. `scripts/package.sh 0.2.0` builds it as well and packs the build with the launcher, the app, the rules and the license texts into `out/freequay-0.2.0-macos.tar.xz`, the release archive.
 
 ## Use
+
+`Freequay.app` starts Windows programs without Terminal. Drop an `.exe` on its window or its Dock icon, pick one with "or choose one…" or double-click it in Finder: it starts in the bottle chosen in the window, through `freequay run`. The window also creates bottles, installs Steam into the chosen bottle and starts it, shows the bottle's files in Finder (where a game's `.exe` is after installing it) and stops all programs of the bottle. Everything else, such as the graphics per program, is done with the launcher. The app looks for `scripts/freequay` next to itself, so leave it in the Freequay folder; drag it into the Dock to keep it at hand.
 
 Commands run from the unpacked release folder or the root of the repository.
 
@@ -153,12 +159,12 @@ The release archive 0.1.0 was tested on 2026-10-17 like a new user would: a brow
 | .NET through Wine Mono | yes | yes, from WineHQ |
 | Settings per game | closed compatibility database | open rules (patch 0005, `compat/`) from AppleGamingWiki, protonfixes, Proton, ProtonDB and DXVK |
 | One-click installers (CrossTie) | yes | no; `freequay fix` installs the runtime packages the rules ask for with winetricks |
-| User interface | yes | the command `freequay` |
+| User interface | yes | one window that starts programs (`Freequay.app`) and the command `freequay` |
 | GStreamer (videos in games) | yes | not built yet |
 
 ## Folders
 
-`downloads/` source packages, `sources/` unpacked and patched sources, `build/` build trees, `deps/` x86_64 libraries, `dist/` the finished build with its backends, `out/` release archives, `tools/` meson, `logs/` logs. Only `scripts/`, `patches/`, `compat/`, `tests/`, `licenses/` and the documents are versioned.
+`downloads/` source packages, `sources/` unpacked and patched sources, `build/` build trees, `deps/` x86_64 libraries, `dist/` the finished build with its backends, `out/` release archives, `tools/` meson, `logs/` logs, `Freequay.app` the app built from `app/`. Only `app/`, `scripts/`, `patches/`, `compat/`, `tests/`, `licenses/` and the documents are versioned.
 
 ## License
 
