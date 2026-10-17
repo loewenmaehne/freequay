@@ -27,7 +27,7 @@ Nothing from the CrossOver app itself: no user interface, no CrossTie installers
 
 ## Install
 
-You need an Apple Silicon Mac with Rosetta 2 (`softwareupdate --install-rosetta` installs it) and about 1.5 GB of disk space for Freequay and a first bottle, plus your games. No Xcode, no Homebrew, no build. Tested on a MacBook Air M1 with 16 GB and macOS 27.0.1.
+You need an Apple Silicon Mac with Rosetta 2 (`softwareupdate --install-rosetta` installs it) and about 1.5 GB of disk space for Freequay and a first bottle; Steam takes another 1.5 GB, plus your games. No Xcode, no Homebrew, no build. Tested on a MacBook Air M1 with 16 GB and macOS 27.0.1.
 
 ```bash
 cd ~
@@ -84,7 +84,7 @@ Bottles live in `~/Library/Application Support/freequay/Bottles`. `run` takes `-
 
 `freequay app <bottle> <program.exe|steam:ID> <backend>` sets the graphics for one program, `-` instead of the backend deletes it, and without a program the command lists the bottle's rules. `freequay rule` adds any directive, `freequay info` shows everything that applies to a program. New rules apply at the next program start, also while Steam is running.
 
-Steam for Windows: install it with `SteamSetup.exe /S` and start `steam.exe` with `run`. Before Steam starts, `run` catches up on the one-time setup the rules ask for (`freequay fix`).
+Steam for Windows: install it with `SteamSetup.exe /S` and start `steam.exe` with `run`. Before Steam starts, `run` catches up on the one-time setup the rules ask for (`freequay fix`). At its first start Steam downloads about 480 MB of updates and restarts twice before the sign-in window comes up, about 80 seconds in all. In one of three tests the restarted Steam then hung without a window; `freequay kill <bottle>` and a new start helped.
 
 ## Patches
 
@@ -135,6 +135,8 @@ The one-time setup (winetricks verbs, registry values, Windows version) is done 
 | Steam for Windows (64-bit client, Chromium 126), `wined3d` | install, self-update and sign-in work; the window shows with patch 0003. With `dxmt` a Steam process aborts at `SwapDeviceContextState`. |
 | Team Fortress 2 through Steam (64-bit, Direct3D 9), `wined3d` | starts with patch 0004 and runs smoothly against bots, best in fullscreen; quits cleanly with patch 0006. With `dxvk` the image stayed black before patch moltenvk-0002; not tried again since. The 32-bit `tf.exe` always restarts the 64-bit game on 64-bit Windows. |
 | Rockstar Games Launcher 1.0.109 with Social Club 2.4.0.240 (Chromium 143), `wined3d` | installer, self-update, Social Club and sign-in work, then the main window opens. With `dxmt` it aborts at `SwapDeviceContextState`, with `dxvk` at `DXGID3D10CreateDevice`. |
+
+The release archive 0.1.0 was tested on 2026-10-17 like a new user would: a browser download (quarantine set as by Chrome) unpacked into a new folder with a space in its path, the quarantine lifted with `xattr`, a new bottle under an empty home directory, and the build tree hidden so that nothing could load from there. All 29 graphics tests passed (Direct3D 9, 11 and 12, 32 and 64 bit, `dxmt`, `dxvk`, `wined3d`, vkd3d, and `d3dmetal` and `d3dmetal3` installed with the archive's `scripts/install-d3dmetal.sh`). Steam installed, updated itself and showed its sign-in window.
 
 `tests/` has the small programs behind these tests; build them with mingw-w64 as their first comment says. `tests/rulecheck` shows what the rules changed for a program: its path, command line, environment variables and where `d3d11.dll` comes from.
 
