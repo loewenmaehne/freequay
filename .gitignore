@@ -8,3 +8,4 @@ logs/
 .DS_Store
 __pycache__/
 out/
+Freequay.app/
