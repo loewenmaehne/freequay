@@ -1,7 +1,9 @@
 // Freequay.app: one window that starts Windows programs without Terminal. Drop an .exe on the
-// window or on the Dock icon, or open it from Finder, and it starts in the chosen bottle. The app
-// only calls scripts/freequay, which sits next to it in the Freequay folder; scripts/build-app.sh
-// builds it.
+// window or on the Dock icon, or open it from Finder, and it starts on the chosen Windows drive.
+// The app only calls scripts/freequay, which sits next to it in the Freequay folder;
+// scripts/build-app.sh builds it. A Windows drive is what the launcher calls a bottle. Since the
+// rules per program let all games share one, the app sets up the first drive by itself and keeps
+// the others in the menu at the top right.
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -43,15 +45,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 final class Model: ObservableObject {
     @Published var bottles: [String] = []
-    @Published var bottle = "" { didSet { UserDefaults.standard.set(bottle, forKey: "bottle") } }
+    @Published var bottle = "" {
+        didSet {
+            UserDefaults.standard.set(bottle, forKey: "bottle")
+            if bottle != oldValue {
+                status = ""
+                steamNote = nil
+            }
+            checkRunning()
+        }
+    }
     @Published var status = ""
-    @Published var busy = false    // a bottle or Steam is being set up
-    @Published var naming = false  // the sheet for a new bottle is open
-    private var waiting: [URL] = []  // programs dropped before there was a bottle
+    @Published var busy = false        // a Windows drive or Steam is being set up
+    @Published var steamStep: String?  // what happens to Steam while it is set up, with a spinner
+    @Published var steamNote: String?  // what came of the last start of Steam
+    @Published var running = false     // programs run on the chosen drive
+    @Published var naming = false      // the sheet for a new drive is open
+    private var waiting: [URL] = []    // programs dropped before there was a drive
+    private var steamWaits = false     // Steam was asked for before there was a drive
 
     let root: URL?  // the Freequay folder
     private let bottlesDir: URL  // as in scripts/freequay
 
+    private static let firstBottle = "games"  // the drive the app sets up by itself, as in the README
     private static let steamSetup = URL(string: "https://cdn.cloudflare.steamstatic.com/client/installer/SteamSetup.exe")!
 
     init() {
@@ -61,6 +77,10 @@ final class Model: ObservableObject {
         guard root != nil else { return }
         liftQuarantine()
         reload()
+        // also programs that end by themselves or were started with the launcher
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.checkRunning() }
+        }
     }
 
     // The folder around the app, if scripts/freequay is in it. macOS runs a downloaded app that
@@ -98,17 +118,30 @@ final class Model: ObservableObject {
             let last = UserDefaults.standard.string(forKey: "bottle") ?? ""
             bottle = bottles.contains(last) ? last : bottles.first ?? ""
         }
+        checkRunning()
+    }
+
+    // Do programs run on the chosen drive? As bottle_running in scripts/freequay: Wine's server
+    // keeps its socket in /tmp/.wine-<uid>/server-<device>-<inode of the bottle> while it runs.
+    func checkRunning() {
+        var info = stat()
+        let now = !bottle.isEmpty && stat(bottlesDir.appendingPathComponent(bottle).path, &info) == 0 &&
+            FileManager.default.fileExists(atPath: String(format: "/tmp/.wine-%u/server-%llx-%llx/socket", getuid(),
+                                                          UInt64(UInt32(bitPattern: info.st_dev)), UInt64(info.st_ino)))
+        if running != now { running = now }
     }
 
     func start(_ urls: [URL]) {
         guard root != nil else { return }
-        if bottle.isEmpty { reload() }  // perhaps created with the launcher meanwhile
         let programs = urls.filter { $0.pathExtension.lowercased() == "exe" }
-        if programs.isEmpty {
+        guard !programs.isEmpty else {
             status = "Freequay starts Windows programs, the files that end in .exe."
-        } else if bottle.isEmpty {
-            waiting = programs
-            naming = true
+            return
+        }
+        if bottle.isEmpty { reload() }  // perhaps created with the launcher meanwhile
+        if bottle.isEmpty {
+            waiting += programs
+            setUp()
         } else {
             programs.forEach { run($0, in: bottle) }
         }
@@ -122,43 +155,57 @@ final class Model: ObservableObject {
         if panel.runModal() == .OK { start(panel.urls) }
     }
 
-    private func run(_ program: URL, in bottle: String, _ arguments: [String] = []) {
+    // what happens with Steam is said on its card, everything else where programs land
+    private func run(_ program: URL, in bottle: String, _ arguments: [String] = [], steam: Bool = false) {
         let started = Date()
-        status = "Started \(program.lastPathComponent) in \(bottle)."
+        let say: @MainActor (String) -> Void = { [weak self] in
+            if steam { self?.steamNote = $0 } else { self?.status = $0 }
+        }
+        say(steam ? "Steam starts." : "Started \(program.lastPathComponent).")
         // report what kept a program from starting; one that ran for a while may end as it likes
-        launch(["run", bottle, program.path] + arguments) { [weak self] code, output in
+        launch(["run", bottle, program.path] + arguments) { code, output in
             guard code != 0 else { return }
             if let error = Model.error(in: output) {
-                self?.status = error
+                say(error)
             } else if Date().timeIntervalSince(started) < 15 {
-                self?.status = "\(program.lastPathComponent) stopped right away (exit code \(code))."
+                say("\(program.lastPathComponent) stopped right away (exit code \(code)).")
             }
         }
     }
 
+    // the first drive, without asking for a name: most people never need a second one
+    private func setUp() {
+        if !busy { create(Model.firstBottle) }
+    }
+
     func create(_ name: String) {
+        let first = bottles.isEmpty
         naming = false
         busy = true
-        status = "Creating the bottle \(name), this takes about a minute."
+        if !steamWaits {  // otherwise the Steam card says it
+            status = first ? "Getting Windows ready, this takes about a minute." : "Setting up the Windows drive \(name), this takes about a minute."
+        }
         launch(["new", name]) { [weak self] code, output in
             guard let self else { return }
             busy = false
-            let programs = waiting
+            let programs = waiting, steam = steamWaits
             waiting = []
+            steamWaits = false
             guard code == 0 else {
-                status = Model.error(in: output) ?? "Could not create the bottle \(name)."
+                steamStep = nil
+                status = Model.error(in: output) ?? "Could not set up the Windows drive \(name)."
                 return
             }
             reload()
             bottle = name
-            status = "The bottle \(name) is ready."
+            status = first ? "Windows is ready." : "The Windows drive \(name) is ready."
             programs.forEach { self.run($0, in: name) }
+            if steam { startSteam() }
         }
     }
 
     func cancelNaming() {
         naming = false
-        waiting = []
     }
 
     var hasSteam: Bool { !bottle.isEmpty && FileManager.default.fileExists(atPath: steam(bottle).path) }
@@ -169,12 +216,23 @@ final class Model: ObservableObject {
 
     // Steam for Windows: installed silently from Valve's installer the first time, as in the README
     func startSteam() {
+        guard root != nil, !busy else { return }
+        if bottle.isEmpty { reload() }
+        if bottle.isEmpty {
+            steamWaits = true
+            steamStep = "Getting Windows ready…"
+            return setUp()
+        }
         let bottle = self.bottle
-        if hasSteam { return run(steam(bottle), in: bottle) }
+        steamNote = nil
+        if hasSteam { return run(steam(bottle), in: bottle, steam: true) }
         busy = true
-        status = "Downloading Steam…"
+        steamStep = "Downloading Steam…"
         Task {
-            defer { busy = false }
+            defer {
+                busy = false
+                steamStep = nil
+            }
             let setup = FileManager.default.temporaryDirectory.appendingPathComponent("SteamSetup.exe")
             do {
                 let (download, response) = try await URLSession.shared.download(from: Model.steamSetup)
@@ -182,24 +240,28 @@ final class Model: ObservableObject {
                 try? FileManager.default.removeItem(at: setup)
                 try FileManager.default.moveItem(at: download, to: setup)
             } catch {
-                status = "Could not download Steam: \(error.localizedDescription)"
+                steamNote = "Could not download Steam: \(error.localizedDescription)"
                 return
             }
-            status = "Installing Steam in \(bottle)…"
+            steamStep = "Installing Steam…"
             let (_, output) = await launch(["run", bottle, setup.path, "/S"])
             try? FileManager.default.removeItem(at: setup)
             guard FileManager.default.fileExists(atPath: steam(bottle).path) else {
-                status = Model.error(in: output) ?? "Steam did not install."
+                steamNote = Model.error(in: output) ?? "Steam did not install."
                 return
             }
-            run(steam(bottle), in: bottle)
-            status = "Steam starts. The first start downloads about 480 MB and takes a minute or two."
+            run(steam(bottle), in: bottle, steam: true)
+            steamNote = "Steam starts. The first start loads about 480 MB, a minute or two."
         }
     }
 
     func stop() {
         let bottle = self.bottle
-        launch(["kill", bottle]) { [weak self] _, _ in self?.status = "Stopped all programs in \(bottle)." }
+        guard !bottle.isEmpty else { return }
+        launch(["kill", bottle]) { [weak self] _, _ in
+            self?.status = "Stopped all programs."
+            self?.checkRunning()
+        }
     }
 
     func showFiles() {
@@ -257,11 +319,12 @@ final class Model: ObservableObject {
         }
     }
 
-    // the last thing the launcher, zsh running it or Wine's loader said before giving up
+    // the last thing the launcher, zsh running it or Wine's loader said before giving up; the
+    // launcher's own name in front of it says nothing in its window
     private static func error(in output: String) -> String? {
         output.split(separator: "\n").last {
             $0.hasPrefix("freequay: ") || $0.hasPrefix("wine: ") || $0.contains("scripts/freequay:")
-        }.map(String.init)
+        }.map { $0.hasPrefix("freequay: ") ? String($0.dropFirst(10)) : String($0) }
     }
 }
 
@@ -274,11 +337,11 @@ private let shore = Color(red: 0.955, green: 0.96, blue: 0.97)
 struct ContentView: View {
     @ObservedObject var model: Model
     @State private var over = false  // a file is being dragged over the window
+    @Environment(\.accessibilityReduceMotion) private var still
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Freequay").font(.system(size: 34, weight: .heavy)).foregroundStyle(ink)
-            Text("Windows programs on your Mac").font(.system(size: 14)).foregroundStyle(muted).padding(.top, 1)
+            header
             if model.root == nil {
                 quay {
                     Text("Freequay.app has to stay in its folder").font(.system(size: 19, weight: .semibold)).foregroundStyle(ink)
@@ -286,35 +349,14 @@ struct ContentView: View {
                         .font(.system(size: 13)).foregroundStyle(muted)
                 }
             } else {
-                quay {
-                    Text(over ? "Let go to start it" : "Drop a Windows program here")
-                        .font(.system(size: 21, weight: .semibold)).foregroundStyle(ink)
-                    Button("or choose one…") { model.choose() }.buttonStyle(Quiet(size: 14))
-                }
-                bottleRow.padding(.top, 22)
-                if !model.bottle.isEmpty {
-                    HStack(spacing: 12) {
-                        Button(model.hasSteam ? "Start Steam" : "Install Steam") { model.startSteam() }
-                            .buttonStyle(Solid()).disabled(model.busy)
-                        if !model.hasSteam {
-                            Text("Steam for Windows from Valve, about 1.5 GB with its first update")
-                                .font(.system(size: 12.5)).foregroundStyle(muted)
-                        }
-                    }
-                    .padding(.top, 16)
-                }
+                quay { landing }
+                steam.padding(.top, 12)
             }
-            HStack(spacing: 8) {
-                if model.busy { ProgressView().controlSize(.small) }
-                Text(model.status).font(.system(size: 12.5)).foregroundStyle(muted).fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(minHeight: 18)
-            .padding(.top, 20)
         }
-        .padding(.horizontal, 32)
-        .padding(.top, 12)
-        .padding(.bottom, 24)
-        .frame(width: 580, alignment: .leading)
+        .padding(.horizontal, 28)
+        .padding(.top, 8)
+        .padding(.bottom, 28)
+        .frame(width: 560, alignment: .leading)
         .background(Color.white)
         .dropDestination(for: URL.self) { urls, _ in
             model.start(urls)
@@ -324,33 +366,110 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in model.reload() }
     }
 
-    // the place where programs land: a calm panel with a quay edge in the accent colour
-    private func quay<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        VStack(spacing: 10, content: content)
-            .frame(maxWidth: .infinity, minHeight: 196)
-            .background(over ? accent.opacity(0.09) : shore)
-            .overlay(alignment: .bottom) { accent.frame(height: 5) }
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .padding(.top, 24)
+    private var header: some View {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Freequay").font(.system(size: 34, weight: .heavy)).foregroundStyle(ink)
+                Text("Windows games on your Mac").font(.system(size: 14)).foregroundStyle(muted)
+            }
+            Spacer()
+            if model.root != nil { drives }
+        }
     }
 
-    private var bottleRow: some View {
+    // where programs land: a calm panel with a quay edge in the accent colour
+    private func quay<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(spacing: 10, content: content)
+            .frame(maxWidth: .infinity, minHeight: 224)
+            .overlay(alignment: .bottom) { if model.root != nil { report } }
+            .background(over ? accent.opacity(0.08) : shore)
+            .overlay(alignment: .bottom) { accent.frame(height: over ? 8 : 5) }
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding(.top, 22)
+            .animation(still ? nil : .easeOut(duration: 0.15), value: over)
+    }
+
+    private var landing: some View {
+        Group {
+            Image(systemName: "arrow.down.to.line")
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(accent)
+                .accessibilityHidden(true)
+                .offset(y: over && !still ? 5 : 0)
+                .padding(.bottom, 4)
+            Text(over ? "Let go to start it" : "Drop a Windows program here")
+                .font(.system(size: 22, weight: .semibold)).foregroundStyle(ink)
+            Button("or choose one…") { model.choose() }.buttonStyle(Quiet(size: 14)).opacity(over ? 0 : 1)
+        }
+    }
+
+    // Steam for Windows, where most games come from; the rules per game apply to games it starts
+    private var steam: some View {
         HStack(spacing: 14) {
-            Text("Bottle").font(.system(size: 13)).foregroundStyle(muted)
-            if model.bottles.isEmpty {
-                Button("Create a bottle") { model.naming = true }.buttonStyle(Solid()).disabled(model.busy)
+            Image(systemName: "gamecontroller.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 42, height: 42)
+                .background(ink, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Steam").font(.system(size: 16, weight: .semibold)).foregroundStyle(ink)
+                Text(model.steamStep ?? model.steamNote ??
+                     (model.hasSteam ? "Your Steam games for Windows" : "Steam for Windows from Valve, about 1.5 GB"))
+                    .font(.system(size: 12.5)).foregroundStyle(muted).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            if model.steamStep != nil {
+                ProgressView().controlSize(.small)
             } else {
-                Picker("Bottle", selection: $model.bottle) {
-                    ForEach(model.bottles, id: \.self) { Text($0).tag($0) }
-                }
-                .labelsHidden()
-                .fixedSize()
-                Button("New…") { model.naming = true }.buttonStyle(Quiet()).disabled(model.busy)
-                Spacer()
-                Button("Show files") { model.showFiles() }.buttonStyle(Quiet())
-                Button("Stop all programs") { model.stop() }.buttonStyle(Quiet())
+                Button(model.hasSteam ? "Open" : "Install") { model.startSteam() }
+                    .buttonStyle(Solid()).disabled(model.busy)
             }
         }
+        .padding(12)
+        .padding(.trailing, 4)
+        .background(shore, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    // what became of the last program, at the foot of the panel; and a way to stop them all
+    private var report: some View {
+        HStack(spacing: 10) {
+            if model.busy && model.steamStep == nil { ProgressView().controlSize(.small) }
+            Text(model.status.isEmpty && model.running ? "Windows programs are running." : model.status)
+                .font(.system(size: 12.5)).foregroundStyle(muted)
+                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            if model.running {
+                Button("Stop all") { model.stop() }.buttonStyle(Quiet(size: 12.5))
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.bottom, 22)
+    }
+
+    // the Windows drives, in the background: one is enough, and the app sets it up by itself
+    private var drives: some View {
+        Menu {
+            Section("Windows drive") {
+                ForEach(model.bottles, id: \.self) { name in
+                    Toggle(name, isOn: Binding(get: { model.bottle == name }, set: { if $0 { model.bottle = name } }))
+                }
+                Button("New Windows Drive…") { model.naming = true }.disabled(model.busy)
+            }
+            Divider()
+            Button("Show Files in Finder") { model.showFiles() }.disabled(model.bottle.isEmpty)
+            Button("Stop All Programs") { model.stop() }.disabled(model.bottle.isEmpty)
+        } label: {
+            if model.bottles.count > 1 {
+                Label(model.bottle, systemImage: "internaldrive").labelStyle(.titleAndIcon)
+            } else {
+                Image(systemName: "ellipsis.circle")
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(model.bottles.count > 1 ? .visible : .hidden)
+        .fixedSize()
+        .help("Each Windows drive has its own C: with its own programs and settings.")
+        .accessibilityLabel("Windows drive")
     }
 }
 
@@ -369,8 +488,8 @@ struct NewBottle: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("New bottle").font(.system(size: 19, weight: .bold)).foregroundStyle(ink)
-            Text("A bottle is a Windows drive of its own. Programs in one bottle share their files and settings.")
+            Text("New Windows drive").font(.system(size: 19, weight: .bold)).foregroundStyle(ink)
+            Text("A separate C: drive with its own programs and settings. One is enough for most games.")
                 .font(.system(size: 13)).foregroundStyle(muted).fixedSize(horizontal: false, vertical: true).padding(.top, 6)
             TextField("Name", text: $name).textFieldStyle(.roundedBorder).padding(.top, 16)
                 .onSubmit { if valid { model.create(name) } }
@@ -382,7 +501,7 @@ struct NewBottle: View {
             .padding(.top, 20)
         }
         .padding(24)
-        .frame(width: 360)
+        .frame(width: 380)
         .background(Color.white)
     }
 }
@@ -395,7 +514,7 @@ private struct Solid: ButtonStyle {
         configuration.label
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(.white)
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 16)
             .padding(.vertical, 7)
             .background(LinearGradient(colors: [accentLight, accent], startPoint: .top, endPoint: .bottom),
                         in: RoundedRectangle(cornerRadius: 7, style: .continuous))
