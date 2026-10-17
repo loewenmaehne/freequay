@@ -93,10 +93,18 @@ bottle_running() { # bottle-dir: is a wineserver running for the bottle?
   [[ -S /tmp/.wine-$UID/$id/socket ]]
 }
 
+# python3 for fix.py. Without the Command Line Tools /usr/bin/python3 only offers to install them.
+have_python() {
+  local p
+  p=$(whence -p python3) || return 1
+  [[ $p != /usr/bin/python3 ]] || xcode-select -p > /dev/null 2>&1
+}
+
 # One-time setup from the rules (scripts/compat/fix.py). winetricks waits until every program
 # of the bottle has ended, so this only runs when nothing runs there.
 run_fix() { # bottle-dir [--list] [key ...]
   local dir=$1; shift
+  have_python || die "freequay fix needs python3; install the Command Line Tools with: xcode-select --install"
   setup_env "$dir" "$(conf_get "$dir" backend dxmt)" 0 0 0
   if [[ ! -f $WINETRICKS ]]; then
     mkdir -p "${WINETRICKS:h}"
@@ -166,11 +174,14 @@ case $cmd in
   new)
     dir=$(bottle_dir "${1:-}")
     [[ -e $dir ]] && die "bottle exists already: $dir"
+    # Wine installs Wine Mono (.NET) silently from dist/wine/share/wine/mono. The release archive
+    # leaves it out; the first new bottle downloads it from WineHQ. Gecko (HTML) stays off,
+    # otherwise Wine asks for the download in a dialog.
+    msi=($WINE_DIR/share/wine/mono/wine-mono-*-x86.msi(N))
+    (( $#msi )) || "$ROOT/scripts/install-mono.sh" ||
+      print -u2 "freequay: Wine Mono is missing, .NET programs will not run in this bottle"
     mkdir -p "$dir"
     setup_env "$dir" wined3d 0 0 0
-    # Wine installs Wine Mono (.NET) silently from dist/wine/share/wine/mono when
-    # scripts/install-mono.sh put it there. Gecko (HTML) stays off, otherwise Wine asks for the
-    # download in a dialog.
     msi=($WINE_DIR/share/wine/mono/wine-mono-*-x86.msi(N))
     overrides="mshtml="; (( $#msi )) || overrides="mscoree,mshtml="
     WINEDLLOVERRIDES=$overrides "$WINE_DIR/bin/wine" wineboot --init
@@ -195,7 +206,11 @@ case $cmd in
     [[ -n "${1:-}" ]] || die "program missing"
     # before Steam starts, catch up on the setup of installed games (freequay fix)
     if [[ $cmd == run && ${1:t:l} == steam.exe ]] && ! bottle_running "$dir"; then
-      run_fix "$dir" || print -u2 "freequay: setup incomplete, starting Steam anyway"
+      if have_python; then
+        run_fix "$dir" || print -u2 "freequay: setup incomplete, starting Steam anyway"
+      else
+        print -u2 "freequay: no python3, skipping the setup of Steam games (xcode-select --install)"
+      fi
     fi
     setup_env "$dir" "$backend" "$avx" "$hud" "$debug"
     # Rosetta reads ROSETTA_ADVERTISE_AVX only at exec; for child processes ntdll sets it itself

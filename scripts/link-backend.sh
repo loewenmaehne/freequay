@@ -11,11 +11,18 @@ WINE_UNIX=$ROOT/dist/wine/lib/wine/x86_64-unix
 DIR=${${1:?directory missing}:A}
 [[ -d $WINE_UNIX ]] || { print -u2 "Wine is not installed yet: $WINE_UNIX"; exit 1; }
 
+# No otool or python3 here: on a Mac without the Command Line Tools both only offer to install
+# them, and the release archive must run there. The @rpath names stand in the binaries as plain
+# strings; the path to Wine is computed in zsh.
+base=$DIR; up=
+while [[ $WINE_UNIX != ${base%/}/* ]]; do base=${base:h}; up+=../; done
+rel=$up${WINE_UNIX#${base%/}/}
+
 for lib in "$DIR"/*.(so|dylib)(N); do
-  otool -L "$lib" | awk 'NR>1 && $1 ~ /^@rpath\// {sub("@rpath/","",$1); print $1}' |
+  LC_ALL=C grep -aoE '@rpath/[A-Za-z0-9_.+-]+\.(so|dylib)' "$lib" | sed 's|^@rpath/||' | sort -u |
   while read -r dep; do
     if [[ ! -e $DIR/$dep && -e $WINE_UNIX/$dep ]]; then
-      ln -s "$(python3 -I -c 'import os, sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$WINE_UNIX/$dep" "$DIR")" "$DIR/$dep"
+      ln -s "$rel/$dep" "$DIR/$dep"
       print "linked: $dep"
     fi
   done
