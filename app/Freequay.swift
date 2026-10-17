@@ -61,7 +61,25 @@ final class Model: ObservableObject {
     @Published var status = ""
     @Published var busy = false    // a bottle or Steam is being set up
     @Published var naming = false  // the sheet for a new bottle is open
+    @Published var starting: String?  // the program being started, until a window of it shows
     private var waiting: [URL] = []  // programs dropped before there was a bottle
+
+    // A start waits for a new window of a Wine program, or for a Wine program to come to the front:
+    // a program that runs already, like Steam, shows its window again instead of a new one. Owner and
+    // size of windows come without the permission for screen recording; only titles would need it.
+    private struct Start {
+        let target: String
+        let name: String
+        let known: Set<Int>  // Wine windows on screen before the start
+        let processes = Model.wineProcesses()  // and Wine processes
+        let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let began = Date()
+        var ended: Date?  // the launched process ended without an error, perhaps after starting another
+        var code: Int32 = 0  // and its exit code; start.exe ends with 3 after starting a shortcut's program
+    }
+    private var pending: Start?
+    private var watch: Task<Void, Never>?
+    private var opened: [String: Set<pid_t>] = [:]  // program -> processes of the windows it opened
 
     let root: URL?  // the Freequay folder
     private let bottlesDir: URL  // as in scripts/freequay
@@ -124,7 +142,7 @@ final class Model: ObservableObject {
     }
 
     func open(_ program: Program) {
-        run(program.target, name: program.name, in: bottle)
+        begin(program.target, name: program.name, in: bottle)
     }
 
     func start(_ urls: [URL]) {
@@ -136,19 +154,104 @@ final class Model: ObservableObject {
         } else if bottle.isEmpty {
             waiting = programs
             naming = true
-        } else {
-            programs.forEach { runFile($0, in: bottle) }
+        } else if let exe = programs.first {
+            runFile(exe, in: bottle)
         }
     }
 
     // An .exe started from outside the list joins the list of its bottle, unless it is an
     // installer: what it installs shows up through its Start menu shortcut anyway.
     private func runFile(_ exe: URL, in bottle: String) {
-        run(exe.path, name: exe.lastPathComponent, in: bottle)
+        guard starting == nil else { return wait() }
         let name = exe.lastPathComponent.lowercased()
-        guard !["setup", "install", "unins"].contains(where: { name.contains($0) }) else { return }
-        _ = output(["programs", bottle, exe.path])
-        if self.bottle == bottle { loadPrograms() }
+        if !["setup", "install", "unins"].contains(where: { name.contains($0) }) {
+            _ = output(["programs", bottle, exe.path])
+            if self.bottle == bottle { loadPrograms() }
+        }
+        begin(exe.path, name: exe.lastPathComponent, in: bottle)
+    }
+
+    // One start at a time: the Open buttons wait until the program shows a new window, or two minutes
+    // at most. A program whose window from an earlier start is still on screen comes to the front.
+    private func begin(_ target: String, name: String, in bottle: String) {
+        guard starting == nil else { return wait() }
+        if let pids = opened[target], let pid = Model.wineWindows().map(\.pid).first(where: pids.contains) {
+            _ = NSRunningApplication(processIdentifier: pid)?.activate(options: [.activateAllWindows])
+            status = "\(name) is already open."
+            return
+        }
+        pending = Start(target: target, name: name, known: Set(Model.wineWindows().map(\.number)))
+        starting = target
+        status = "Starting \(name)…"
+        run(target, name: name, in: bottle)
+        watch = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                guard let self, let start = pending else { return }
+                let fresh = Model.wineWindows().filter { !start.known.contains($0.number) }.map(\.pid)
+                let front = NSWorkspace.shared.frontmostApplication
+                if !fresh.isEmpty {
+                    opened[start.target, default: []].formUnion(fresh)
+                    finish("\(start.name) is open.")
+                } else if let front, front.processIdentifier != start.front,
+                          front.executableURL?.lastPathComponent.hasPrefix("wine") == true {
+                    opened[start.target, default: []].insert(front.processIdentifier)
+                    finish("\(start.name) is open.")
+                } else if let ended = start.ended, Date().timeIntervalSince(ended) > 2,
+                          Model.wineProcesses().subtracting(start.processes).isEmpty {
+                    // it ended and left nothing new running: it failed, or it handed over to a copy that
+                    // runs already, like a second Steam
+                    if start.code != 0 { return finish("\(start.name) stopped right away (exit code \(start.code)).") }
+                    let apps = Set(Model.wineWindows().map(\.pid))
+                    if apps.count == 1, let pid = apps.first {
+                        _ = NSRunningApplication(processIdentifier: pid)?.activate(options: [.activateAllWindows])
+                        opened[start.target, default: []].insert(pid)
+                    }
+                    finish("\(start.name) is already running.")
+                } else if start.ended.map({ Date().timeIntervalSince($0) > 15 }) == true {
+                    finish(start.code != 0 ? "\(start.name) stopped right away (exit code \(start.code))."
+                                           : "\(start.name) did not open a window.")
+                } else if Date().timeIntervalSince(start.began) > 120 {
+                    finish("\(start.name) has not shown a window yet. It may still be starting.")
+                }
+            }
+        }
+    }
+
+    private func finish(_ message: String) {
+        pending = nil
+        starting = nil
+        watch?.cancel()
+        status = message
+    }
+
+    private func wait() {
+        status = "\(pending?.name ?? "A program") is still starting. Programs start one at a time."
+    }
+
+    // running Wine programs: processes of Wine's loader, whatever Windows program they run
+    nonisolated private static func wineProcesses() -> Set<pid_t> {
+        var pids = [pid_t](repeating: 0, count: 8192)
+        let count = Int(proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size)))
+        var path = [CChar](repeating: 0, count: 4096)
+        return Set(pids.prefix(max(count, 0)).filter { pid in
+            pid > 0 && proc_pidpath(pid, &path, UInt32(path.count)) > 0
+                && String(cString: path).hasSuffix("/lib/wine/x86_64-unix/wine")
+        })
+    }
+
+    // on-screen windows of Wine programs, as window number and owning process
+    nonisolated private static func wineWindows() -> [(number: Int, pid: pid_t)] {
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        return windows.compactMap { window in
+            let bounds = window[kCGWindowBounds as String] as? [String: Any]
+            guard (window[kCGWindowLayer as String] as? Int) == 0,
+                  (window[kCGWindowOwnerName as String] as? String)?.hasPrefix("wine") == true,
+                  (bounds?["Width"] as? Double ?? 0) >= 40, (bounds?["Height"] as? Double ?? 0) >= 40,
+                  let number = window[kCGWindowNumber as String] as? Int,
+                  let pid = window[kCGWindowOwnerPID as String] as? pid_t else { return nil }
+            return (number, pid)
+        }
     }
 
     // takes a program off the list: an added one is forgotten, a found one hidden; nothing is deleted
@@ -166,17 +269,19 @@ final class Model: ObservableObject {
         if panel.runModal() == .OK { start(panel.urls) }
     }
 
-    private func run(_ target: String, name: String, in bottle: String, _ arguments: [String] = []) {
+    private func run(_ target: String, name: String, in bottle: String) {
         let started = Date()
-        status = "Started \(name) in \(bottle)."
-        launch(["run", bottle, target] + arguments) { [weak self] code, output in
+        launch(["run", bottle, target]) { [weak self] code, output in
             guard let self else { return }
             if self.bottle == bottle { loadPrograms() }  // an installer may have added programs
             // report what kept a program from starting; one that ran for a while may end as it likes
-            guard code != 0 else { return }
-            if let error = Model.error(in: output) {
+            let error = code == 0 ? nil : Model.error(in: output)
+            if pending?.target == target {
+                // without a message, the watch decides once it sees what the process left running
+                if let error { finish(error) } else { pending?.ended = Date(); pending?.code = code }
+            } else if let error {
                 status = error
-            } else if Date().timeIntervalSince(started) < 15 {
+            } else if code != 0, Date().timeIntervalSince(started) < 15 {
                 status = "\(name) stopped right away (exit code \(code))."
             }
         }
@@ -198,7 +303,7 @@ final class Model: ObservableObject {
             reload()
             bottle = name
             status = "The bottle \(name) is ready."
-            programs.forEach { self.runFile($0, in: name) }
+            if let exe = programs.first { self.runFile(exe, in: name) }
         }
     }
 
@@ -240,13 +345,14 @@ final class Model: ObservableObject {
                 return
             }
             if self.bottle == bottle { loadPrograms() }
-            run(steam.path, name: "Steam", in: bottle)
-            status = "Steam starts. The first start downloads about 480 MB and takes a minute or two."
+            begin(steam.path, name: "Steam", in: bottle)
+            if starting != nil { status = "Starting Steam. The first start downloads about 480 MB and takes a minute or two." }
         }
     }
 
     func stop() {
         let bottle = self.bottle
+        if pending != nil { finish("Stopping all programs in \(bottle)…") }
         launch(["kill", bottle]) { [weak self] _, _ in self?.status = "Stopped all programs in \(bottle)." }
     }
 
@@ -345,7 +451,9 @@ struct ContentView: View {
                 }
             }
             HStack(spacing: 8) {
-                if model.busy { ProgressView().controlSize(.small) }
+                if model.busy || (model.starting != nil && !model.programs.contains { $0.target == model.starting }) {
+                    ProgressView().controlSize(.small)
+                }
                 Text(model.status).font(.system(size: 12.5)).foregroundStyle(muted).fixedSize(horizontal: false, vertical: true)
             }
             .frame(minHeight: 18)
@@ -439,22 +547,28 @@ struct ContentView: View {
         }
     }
 
+    // a program of the list; while one starts, its row shows the spinner and all rows wait
     private func row(_ program: Program) -> some View {
-        Button { model.open(program) } label: {
+        let locked = model.starting != nil
+        return Button { model.open(program) } label: {
             HStack(spacing: 10) {
                 Text(program.name).font(.system(size: 15, weight: .semibold)).foregroundStyle(ink).lineLimit(1)
                 if program.steamGame {
                     Text("Steam game").font(.system(size: 12)).foregroundStyle(muted)
                 }
                 Spacer(minLength: 12)
-                Text("Open").font(.system(size: 13, weight: .medium)).foregroundStyle(accent)
+                if model.starting == program.target {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text("Open").font(.system(size: 13, weight: .medium)).foregroundStyle(accent).opacity(locked ? 0.35 : 1)
+                }
             }
             .padding(.horizontal, 20)
             .frame(height: 46)
-            .background(hovered == program.id ? accent.opacity(0.07) : Color.clear)
+            .background(hovered == program.id && !locked ? accent.opacity(0.07) : Color.clear)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.plain)  // not disabled while locked: that would grey out the spinner too
         .onHover { inside in
             if inside { hovered = program.id } else if hovered == program.id { hovered = nil }
         }
