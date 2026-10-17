@@ -137,8 +137,25 @@ final class Model: ObservableObject {
             waiting = programs
             naming = true
         } else {
-            programs.forEach { run($0.path, name: $0.lastPathComponent, in: bottle) }
+            programs.forEach { runFile($0, in: bottle) }
         }
+    }
+
+    // An .exe started from outside the list joins the list of its bottle, unless it is an
+    // installer: what it installs shows up through its Start menu shortcut anyway.
+    private func runFile(_ exe: URL, in bottle: String) {
+        run(exe.path, name: exe.lastPathComponent, in: bottle)
+        let name = exe.lastPathComponent.lowercased()
+        guard !["setup", "install", "unins"].contains(where: { name.contains($0) }) else { return }
+        _ = output(["programs", bottle, exe.path])
+        if self.bottle == bottle { loadPrograms() }
+    }
+
+    // takes a program off the list: an added one is forgotten, a found one hidden; nothing is deleted
+    func remove(_ program: Program) {
+        _ = output(["programs", bottle, program.target, "-"])
+        loadPrograms()
+        status = "Removed \(program.name) from the list."
     }
 
     func choose() {
@@ -181,7 +198,7 @@ final class Model: ObservableObject {
             reload()
             bottle = name
             status = "The bottle \(name) is ready."
-            programs.forEach { self.run($0.path, name: $0.lastPathComponent, in: name) }
+            programs.forEach { self.runFile($0, in: name) }
         }
     }
 
@@ -435,6 +452,9 @@ struct ContentView: View {
         .buttonStyle(.plain)
         .onHover { inside in
             if inside { hovered = program.id } else if hovered == program.id { hovered = nil }
+        }
+        .contextMenu {
+            Button("Remove from List") { model.remove(program) }
         }
     }
 
