@@ -21,6 +21,8 @@
 	</array>
 	<key>CFBundleExecutable</key>
 	<string>Freequay</string>
+	<key>CFBundleIconFile</key>
+	<string>Freequay</string>
 	<key>CFBundleIdentifier</key>
 	<string>io.github.loewenmaehne.freequay</string>
 	<key>CFBundleInfoDictionaryVersion</key>
