@@ -6,18 +6,18 @@ A quay is where ships come ashore; here Windows games land on your Mac, for free
 
 Freequay is not affiliated with, endorsed by or supported by CodeWeavers or Apple. CrossOver is a trademark of CodeWeavers, Inc. CodeWeavers publish the sources this builds on and do most of the work on Wine for the Mac; if you want something that just works, with support, buy CrossOver.
 
-There are no prebuilt binaries. You build it yourself, and you download Apple's D3DMetal yourself if you want it.
+Releases come as a ready-made archive (see Install); you can also build it yourself. Apple's D3DMetal is in neither: you download it from Apple yourself if you want it.
 
 ## What is in it
 
 - Wine 11.0 with all CodeWeavers patches from `crossover-sources-26.3.0.tar.gz`: msync, the D3DMetal hooks in winemac.drv, Rosetta tweaks and their fixes for single programs (Steam, the Rockstar Games Launcher, Epic, Ubisoft Connect, GTA IV and others). Built as x86_64 for Rosetta 2; 32-bit programs run through WoW64.
 - FreeType, GnuTLS, nettle and gmp as x86_64 libraries from the same package. nettle 3.10 comes from the GNU release because the package lacks its `Makefile.in`.
 - Graphics backends, chosen per program:
-  - `dxmt`: DXMT 0.80 (Feifan He for CodeWeavers, LGPL-2.1), Direct3D 10 and 11 on Metal.
+  - `dxmt`: DXMT 0.80 (Feifan He, MIT; versions after 0.80 are LGPL-2.1), Direct3D 10 and 11 on Metal.
   - `dxvk`: DXVK 1.10.3, CodeWeavers' Mac version from the same package (zlib), Direct3D 9 and 11 over Vulkan, with CodeWeavers' MoltenVK (Apache-2.0), which emulates geometry shaders.
   - `wined3d`: Wine's own Direct3D up to version 11; on the Mac CodeWeavers send Direct3D 10 and 11 through Vulkan.
   - `d3dmetal` and `d3dmetal3`: Apple's D3DMetal from the Game Porting Toolkit 4.0 beta 2 and 3.0, Direct3D 11 and 12. Only if you download it from Apple yourself; Apple's license applies.
-- Wine Mono from WineHQ for .NET programs; every new bottle gets it.
+- Wine Mono from WineHQ for .NET programs; every new bottle gets it. The release archive leaves it out, the first `freequay new` downloads it.
 - Rules per program: the open counterpart of CrossOver's closed compatibility database, filled from AppleGamingWiki, umu-protonfixes, Proton, ProtonDB and DXVK (see below).
 - `scripts/freequay`, a small launcher for bottles.
 
@@ -25,16 +25,31 @@ There are no prebuilt binaries. You build it yourself, and you download Apple's 
 
 Nothing from the CrossOver app itself: no user interface, no CrossTie installers, no D3DMetal from CrossOver and not CodeWeavers' compatibility database. GStreamer is not built yet, so games that play videos through Media Foundation may show black videos.
 
-## Requirements
+## Install
 
-- An Apple Silicon Mac with Rosetta 2. Tested on a MacBook Air M1 with 16 GB and macOS 27.0.1.
-- Xcode (MoltenVK is built with xcodebuild).
-- Homebrew with `bison pkgconf mingw-w64 autoconf automake libtool m4 ninja glslang cabextract python`.
-- About 4 GB of disk space for sources, build and result, plus your games.
+You need an Apple Silicon Mac with Rosetta 2 (`softwareupdate --install-rosetta` installs it) and about 1.5 GB of disk space for Freequay and a first bottle, plus your games. No Xcode, no Homebrew, no build. Tested on a MacBook Air M1 with 16 GB and macOS 27.0.1.
+
+```bash
+cd ~
+curl -LO https://github.com/loewenmaehne/freequay/releases/download/v0.1.0/freequay-0.1.0-macos.tar.xz
+tar -xf freequay-0.1.0-macos.tar.xz
+cd freequay-0.1.0
+scripts/freequay new games
+```
+
+The folder can go anywhere, the launcher finds everything relative to itself. Bottles live outside it (see Use), so a newer release can simply replace the folder; install D3DMetal again after that.
+
+Downloaded with a browser instead of curl? Then macOS quarantines the archive and everything unpacked from it, by Finder or by `tar`, and Gatekeeper stops the unsigned `wine` with a dialog. Lift the quarantine once, after unpacking:
+
+```bash
+xattr -dr com.apple.quarantine ~/freequay-0.1.0
+```
+
+The first `freequay new` downloads Wine Mono (82 MB) from WineHQ. `freequay fix`, which installs the runtime packages that rules ask for, needs python3 from the Command Line Tools (`xcode-select --install`), and many of those packages need `cabextract` (Homebrew); without them, Steam and games start without that setup. D3DMetal is installed as described under Build, `scripts/install-d3dmetal.sh` is in the archive too.
 
 ## Build
 
-All commands run from the root of the repository.
+You need Xcode (MoltenVK is built with xcodebuild), Homebrew with `bison pkgconf mingw-w64 autoconf automake libtool m4 ninja glslang cabextract python` and about 4 GB of disk space for sources, build and result. All commands run from the root of the repository.
 
 ```bash
 scripts/fetch-sources.sh      # CodeWeavers' sources and nettle, unpacked and patched in sources/
@@ -49,7 +64,11 @@ scripts/compat/update.sh      # rules from the open sources, optional: compat/ h
 
 D3DMetal: download "Evaluation environment for Windows games" from developer.apple.com, mount it and run `scripts/install-d3dmetal.sh "/Volumes/<volume>"`; pass `d3dmetal3` as the second argument for version 3.0.
 
+`scripts/package.sh 0.1.0` packs the build with the launcher, the rules and the license texts into `out/freequay-0.1.0-macos.tar.xz`, the release archive.
+
 ## Use
+
+Commands run from the unpacked release folder or the root of the repository.
 
 ```bash
 scripts/freequay new games
@@ -137,7 +156,7 @@ The one-time setup (winetricks verbs, registry values, Windows version) is done 
 
 ## Folders
 
-`downloads/` source packages, `sources/` unpacked and patched sources, `build/` build trees, `deps/` x86_64 libraries, `dist/` the finished build with its backends, `tools/` meson, `logs/` logs. Only `scripts/`, `patches/`, `compat/`, `tests/` and the documents are versioned.
+`downloads/` source packages, `sources/` unpacked and patched sources, `build/` build trees, `deps/` x86_64 libraries, `dist/` the finished build with its backends, `out/` release archives, `tools/` meson, `logs/` logs. Only `scripts/`, `patches/`, `compat/`, `tests/`, `licenses/` and the documents are versioned.
 
 ## License
 
@@ -145,3 +164,4 @@ The one-time setup (winetricks verbs, registry values, Windows version) is done 
 - `patches/0*.patch` change Wine and are under Wine's license, LGPL-2.1-or-later. `patches/dxvk-*.patch` are under DXVK's zlib license, `patches/moltenvk-*.patch` under MoltenVK's Apache-2.0.
 - The generated files in `compat/` keep the license of their source, named in each file's header: `applegamingwiki.txt` CC BY-NC-SA 3.0 (non-commercial), `protondb.txt` ODbL 1.0, `protonfixes.txt` BSD-2-Clause, `proton.txt` BSD-3-Clause, `dxvk.txt` zlib. Each row of `notes.tsv` names its source and keeps that source's license.
 - Builds contain Wine, DXVK, MoltenVK, DXMT and other components under their own licenses. If you pass a build on, those licenses apply, including the LGPL's source requirements. D3DMetal is Apple's and under Apple's license.
+- The release archive has the license texts of all its parts in `licenses/`; `licenses/README.md` lists them and where their source code is.
