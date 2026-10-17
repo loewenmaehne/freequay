@@ -72,7 +72,7 @@ D3DMetal: download "Evaluation environment for Windows games" from developer.app
 
 ## Use
 
-`Freequay.app` starts Windows programs without Terminal. Drop an `.exe` on its window or its Dock icon, pick one with "or choose one…" or double-click it in Finder: it starts in the bottle chosen in the window, through `freequay run`. The window also creates bottles, installs Steam into the chosen bottle and starts it, shows the bottle's files in Finder (where a game's `.exe` is after installing it) and stops all programs of the bottle. Everything else, such as the graphics per program, is done with the launcher. The app looks for `scripts/freequay` next to itself, so leave it in the Freequay folder; drag it into the Dock to keep it at hand.
+`Freequay.app` starts Windows programs without Terminal. Drop an `.exe` on its window or its Dock icon, pick one with "or choose one…" or double-click it in Finder: it starts through `freequay run`. The app calls bottles Windows drives and keeps them in the background: the first time, it sets one up by itself (`games`, about a minute), because one is enough when the rules per program keep games apart. The menu at the top right switches between drives, creates another one, shows a drive's files in Finder (where a game's `.exe` is after installing it) and stops all its programs. The Steam card below the drop area installs Steam for Windows into the drive and starts it. While programs run, the window says so and offers to stop them all. Everything else, such as the graphics per program, is done with the launcher. The app looks for `scripts/freequay` next to itself, so leave it in the Freequay folder; drag it into the Dock to keep it at hand.
 
 Commands run from the unpacked release folder or the root of the repository.
 
