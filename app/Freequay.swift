@@ -207,12 +207,17 @@ final class Model: ObservableObject {
         waiting = []
     }
 
-    var hasSteam: Bool { programs.contains { $0.target.hasSuffix("/Steam/steam.exe") } }
+    // installed, whether or not it was taken off the list
+    var hasSteam: Bool { !bottle.isEmpty && FileManager.default.fileExists(atPath: steam(bottle).path) }
+
+    private func steam(_ bottle: String) -> URL {
+        bottlesDir.appendingPathComponent(bottle).appendingPathComponent("drive_c/Program Files (x86)/Steam/steam.exe")
+    }
 
     // Steam for Windows, installed silently from Valve's installer as in the README, then started
     func installSteam() {
         let bottle = self.bottle
-        let steam = bottlesDir.appendingPathComponent(bottle).appendingPathComponent("drive_c/Program Files (x86)/Steam/steam.exe")
+        let steam = steam(bottle)
         busy = true
         status = "Downloading Steam…"
         Task {
