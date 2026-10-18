@@ -32,20 +32,23 @@ for t in function_grep.pl widl winebuild winecpp winedump wineg++ winegcc winema
   find "$STAGE/dist/wine/share/man" -name "$t.1" -delete
 done
 
-# The x86_64 libraries name each other by their path in deps/ of the build tree; in the archive
-# they find each other next to themselves. Wine loads them by name from deps/lib, where
-# scripts/freequay points DYLD_FALLBACK_LIBRARY_PATH.
+# The x86_64 libraries name each other by their path in deps/ of the build tree, where deps/
+# really is if it is a link; in the archive they find each other next to themselves. Wine loads
+# them by name from deps/lib, where scripts/freequay points DYLD_FALLBACK_LIBRARY_PATH.
+DEPS=$ROOT/deps/lib
+DEPS=${DEPS:A}/
 for f in libMoltenVK.dylib libfreetype.6.dylib libgnutls.30.dylib libgmp.10.dylib \
     libnettle.8.9.dylib libnettle.8.dylib libhogweed.6.9.dylib libhogweed.6.dylib; do
-  cp -Pc "$ROOT/deps/lib/$f" "$STAGE/deps/lib/"
+  cp -Pc "$DEPS$f" "$STAGE/deps/lib/"
 done
 for f in "$STAGE"/deps/lib/*.dylib(.); do
   install_name_tool -id "@rpath/$(otool -D "$f" | tail -1 | xargs basename)" "$f" 2> /dev/null
-  otool -L "$f" | awk -v d="$ROOT/deps/lib/" 'index($1, d) == 1 {print $1}' | sort -u |
+  otool -L "$f" | awk -v d="$DEPS" 'index($1, d) == 1 {print $1}' | sort -u |
     while read -r dep; do install_name_tool -change "$dep" "@loader_path/${dep:t}" "$f" 2> /dev/null; done
 done
 codesign --force --sign - "$STAGE/deps/lib/libMoltenVK.dylib" 2> /dev/null
-if otool -L "$STAGE"/deps/lib/*.dylib(.) | grep -F -- "$ROOT/deps/"; then
+# besides each other, the libraries may only use the system's
+if otool -L "$STAGE"/deps/lib/*.dylib(.) | awk '!/:$/ && $1 ~ /^\// && $1 !~ /^\/(usr\/lib|System)\//' | grep .; then
   print -u2 "deps/lib still points into the build tree"; exit 1
 fi
 
