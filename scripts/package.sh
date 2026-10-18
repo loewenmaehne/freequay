@@ -1,9 +1,9 @@
 #!/bin/zsh
 # Packs the finished build into a release archive that runs without Xcode, Homebrew or a build of
-# its own: Wine, DXMT, DXVK, MoltenVK, the x86_64 libraries, the launcher, the rules and the license
-# texts. Left out: D3DMetal (Apple's license, scripts/install-d3dmetal.sh), Wine Mono (the first
-# `freequay new` downloads it from WineHQ) and what only building needs (headers, import libraries,
-# compiler tools).
+# its own: Wine, DXMT, DXVK, MoltenVK, the x86_64 libraries, the launcher, Freequay.app, the rules
+# and the license texts. Left out: D3DMetal (Apple's license, scripts/install-d3dmetal.sh), Wine
+# Mono (the first `freequay new` downloads it from WineHQ) and what only building needs (headers,
+# import libraries, compiler tools).
 # Usage: package.sh <version>      writes out/freequay-<version>-macos.tar.xz and its .sha256
 set -euo pipefail
 
@@ -49,6 +49,8 @@ if otool -L "$STAGE"/deps/lib/*.dylib(.) | grep -F -- "$ROOT/deps/"; then
 fi
 
 cp "$ROOT"/scripts/{freequay,install-d3dmetal.sh,install-mono.sh,link-backend.sh} "$STAGE/scripts/"
+"$ROOT/scripts/build-app.sh" "$VERSION"
+cp -Rc "$ROOT/Freequay.app" "$STAGE/"
 cp "$ROOT/scripts/compat/fix.py" "$STAGE/scripts/compat/"
 cp -R "$ROOT/compat" "$STAGE/compat"
 cp "$ROOT/README.md" "$ROOT/LICENSE" "$STAGE/"

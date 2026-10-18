@@ -2,7 +2,8 @@
 # Freequay: launcher for the Wine build from CodeWeavers' CrossOver 26.3.0 sources.
 #
 #   freequay new <bottle>                          create a bottle
-#   freequay run <bottle> [options] <exe> [args]   start a Windows program
+#   freequay run <bottle> [options] <exe> [args]   start a Windows program, a shortcut (.lnk) or a
+#                                                   Steam game (steam:ID)
 #   freequay wine <bottle> <program> [args]        start a Wine program (winecfg, regedit, cmd ...)
 #   freequay set <bottle> <key> <value>            change a bottle default
 #   freequay app <bottle> [<program.exe> <backend|->]  set, delete or show graphics per program
@@ -13,6 +14,10 @@
 #                                                   without an ID
 #   freequay kill <bottle>                         stop all processes of the bottle
 #   freequay list                                  list bottles
+#   freequay programs <bottle> [<program> [-]]     list what run can start: Steam, its games, the
+#                                                   shortcuts in the Start menu and on the desktop
+#                                                   and the programs added here; add one, or take
+#                                                   one off the list with -
 #
 # Options for run (override the bottle defaults):
 #   --backend d3dmetal|d3dmetal3|dxmt|dxvk|wined3d   graphics for all programs without a rule
@@ -85,6 +90,31 @@ rule_del() { # bottle-dir key [directive]: delete the rules of a key, only those
   [[ -f $f ]] || return 0
   KEY="$2" DIR="${3:-}" awk -F'\t' '$1 != ENVIRON["KEY"] || (ENVIRON["DIR"] != "" && $0 !~ ("\t" ENVIRON["DIR"] "="))' "$f" > "$f.tmp"
   mv "$f.tmp" "$f"
+}
+
+line_del() { # file line: delete every copy of that exact line
+  [[ -f $1 ]] || return 0
+  LINE="$2" awk '$0 != ENVIRON["LINE"]' "$1" > "$1.tmp"
+  mv "$1.tmp" "$1"
+}
+
+# What a bottle can start without being added: Steam, its installed games and the shortcuts
+# installers put into the Start menu and on the desktop, one name and run target per line.
+# Shortcuts (.lnk) start their program through Wine's start.exe; Steam's own shortcut and
+# uninstallers are left out.
+found_programs() { # bottle-dir
+  local steam="$1/drive_c/Program Files (x86)/Steam" f id name
+  [[ -f $steam/steam.exe ]] && print -r -- "Steam"$'\t'"$steam/steam.exe"
+  for f in "$steam"/steamapps/appmanifest_<->.acf(N); do
+    id=${${f:t:r}#appmanifest_}
+    [[ $id != 228980 ]] || continue  # Steamworks Common Redistributables, not a game
+    name=$(sed -n 's/^[[:space:]]*"name"[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' "$f" | head -1)
+    print -r -- "${name:-steam:$id}"$'\t'"steam:$id"
+  done | sort -f
+  for f in "$1"/drive_c/{ProgramData,users/*/AppData/Roaming}/Microsoft/Windows/Start\ Menu/Programs/**/*.lnk(N) \
+      "$1"/drive_c/users/*/Desktop/*.lnk(N); do
+    [[ ${f:t:r:l} == (steam|*uninstall*) ]] || print -r -- "${f:t:r}"$'\t'"$f"
+  done | sort -f -u -t$'\t' -k1,1
 }
 
 bottle_running() { # bottle-dir: is a wineserver running for the bottle?
@@ -204,6 +234,10 @@ case $cmd in
       esac
     done
     [[ -n "${1:-}" ]] || die "program missing"
+    # a Steam game by its ID: Steam starts it, and starts itself first if needed
+    if [[ $cmd == run && $1 == steam:<-> ]]; then
+      set -- "$dir/drive_c/Program Files (x86)/Steam/steam.exe" -applaunch "${1#steam:}" "${@:2}"
+    fi
     # before Steam starts, catch up on the setup of installed games (freequay fix)
     if [[ $cmd == run && ${1:t:l} == steam.exe ]] && ! bottle_running "$dir"; then
       if have_python; then
@@ -299,8 +333,45 @@ case $cmd in
   list)
     [[ -d $BOTTLES ]] && ls -1 "$BOTTLES" || true
     ;;
+  programs)
+    # One line per program: its name, a tab and what run takes for it; first what the bottle has
+    # (found_programs), then what was added. programs.txt in the bottle keeps the added programs
+    # (add, tab, path) and the found ones taken off the list (hide, tab, run target).
+    dir=$(bottle_dir "${1:-}")
+    [[ -d $dir ]] || die "no bottle at $dir"
+    list=$dir/programs.txt
+    if [[ -n "${2:-}" ]]; then
+      target=$2
+      [[ $target == steam:<-> || $target == /* ]] || target=${target:a}
+      [[ $target != *[$'\t\n']* ]] || die "invalid program: $target"
+      touch "$list"
+      if [[ ${3:-} == - ]]; then
+        # an added program is forgotten, a found one hidden; no file is deleted
+        line_del "$list" "add"$'\t'"$target"
+        if found_programs "$dir" | cut -f2 | grep -xF -- "$target" > /dev/null; then
+          grep -xF -- "hide"$'\t'"$target" "$list" > /dev/null || print -r -- "hide"$'\t'"$target" >> "$list"
+        fi
+      else
+        [[ $target == steam:<-> || -f $target ]] || die "no program at $target"
+        line_del "$list" "hide"$'\t'"$target"
+        found_programs "$dir" | cut -f2 | grep -xF -- "$target" > /dev/null ||
+          grep -xF -- "add"$'\t'"$target" "$list" > /dev/null || print -r -- "add"$'\t'"$target" >> "$list"
+      fi
+      exit 0
+    fi
+    {
+      found_programs "$dir"
+      if [[ -f $list ]]; then
+        awk -F'\t' '$1 == "add" { print $2 }' "$list" | while IFS= read -r f; do
+          if [[ -f $f ]]; then print -r -- "${f:t:r}"$'\t'"$f"; fi
+        done | sort -f
+      fi
+    } | LIST=$list awk -F'\t' '
+      BEGIN { while ((getline line < ENVIRON["LIST"]) > 0) { split(line, p, "\t"); if (p[1] == "hide") hidden[p[2]] = 1 } }
+      !hidden[$2] && !seen[$2]++'
+    ;;
   *)
-    sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '/^set -e/q;2,$p' "$0" | sed 's/^# \{0,1\}//'
     [[ -z $cmd ]] || exit 1
     ;;
 esac
