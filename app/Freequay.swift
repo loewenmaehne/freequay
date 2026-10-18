@@ -268,7 +268,7 @@ final class Model: ObservableObject {
         guard root != nil else { return }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.exe]
-        panel.message = "Choose a Windows program or installer"
+        panel.message = "Choose a Windows program or installer you trust"
         if panel.runModal() == .OK { start(panel.urls) }
     }
 
@@ -617,6 +617,10 @@ struct NewBottle: View {
             Text("New bottle").font(.system(size: 19, weight: .bold)).foregroundStyle(ink)
             Text("A bottle is a Windows drive of its own. Programs in one bottle share their files and settings.")
                 .font(.system(size: 13)).foregroundStyle(muted).fixedSize(horizontal: false, vertical: true).padding(.top, 6)
+            // a bottle is no sandbox: Wine's drive Z: is the whole Mac
+            (Text("Only start programs you trust. ").fontWeight(.semibold).foregroundColor(ink)
+                + Text("Windows programs in a bottle can read and change all your files."))
+                .font(.system(size: 13)).foregroundStyle(muted).fixedSize(horizontal: false, vertical: true).padding(.top, 8)
             TextField("Name", text: $name).textFieldStyle(.roundedBorder).padding(.top, 16)
                 .onSubmit { if valid { model.create(name) } }
             HStack(spacing: 16) {
