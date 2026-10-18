@@ -14,6 +14,8 @@ You need an Apple Silicon Mac with macOS 14 or newer, Rosetta 2 and about 1.5 GB
 
 A bottle is not a sandbox. Wine shows your whole Mac to Windows programs as drive Z:, so they can read and change all your files, just as a Mac program can. Only start Windows programs you trust.
 
+Freequay itself collects no data. It downloads from AppleGamingWiki (settings for your Steam games), WineHQ (Wine Mono for a new bottle), Valve (Steam, when you install it), GitHub (winetricks), Microsoft and others through winetricks (runtime packages games ask for) and, only if you add it yourself, Apple (D3DMetal).
+
 Leave the app in its folder: it finds the rest of Freequay next to itself. Drag it into the Dock to keep it at hand. Bottles and the settings from AppleGamingWiki live outside the folder, so a newer release can replace it.
 
 ## What runs
@@ -22,7 +24,7 @@ Tested on a MacBook Air M1 with 16 GB and macOS 27.0.1, not yet on an older macO
 
 | Program | Result |
 |---|---|
-| Steam for Windows | installs, updates itself and signs in. The first start downloads about 575 MB in two updates and took 80 to 150 seconds in the tests; in one of three tests Steam then hung without a window, and Stop all programs and a new start helped. |
+| Steam for Windows | installs, updates itself and signs in. The first start downloads about 575 MB in two updates; after each update Steam closes to start again, and in two of three test bottles on 2026-10-18 it did not come back. Stop all programs and a new start helped, and the sign-in window then came after about 20 seconds. |
 | Team Fortress 2 through Steam (Direct3D 9) | runs smoothly against bots, best in fullscreen |
 | FINAL FANTASY XIV: Dawntrail Benchmark (Direct3D 11, .NET launcher) | runs through: 2679 points at 1920×1080 "High (Desktop)", 23 to 35 FPS in the foreground |
 | Rockstar Games Launcher with Social Club | installs, updates itself, signs in and opens its main window |
@@ -40,7 +42,8 @@ Games that play videos through Media Foundation may show them black, because GSt
 - Show files opens the bottle's drive C: in Finder; Stop all programs ends every program of the bottle. Programs keep running when the app quits.
 - If a program lies in Downloads, Documents or on the Desktop, macOS asks whether Freequay may access that folder. Allow it, or Wine cannot read the program.
 - When it starts, the app lifts the download quarantine from its own folder. Without that, macOS would stop the unsigned `wine`.
-- When it starts, the app also fetches the settings per game from AppleGamingWiki onto your Mac if they are missing or older than 30 days (about 3 MB, see Rules from open sources). Until then, games start without them.
+- The first time it opens, the app lists the servers Freequay downloads from, and why. Freequay itself collects no data.
+- The settings for your Steam games come from AppleGamingWiki: the app looks up each installed game there, at most once a week (see Rules from open sources).
 
 Everything else, such as the graphics per program, is done in Terminal with `scripts/freequay`, the launcher the app calls as well.
 
@@ -56,7 +59,7 @@ scripts/freequay new games
 
 curl sets no quarantine. After a browser download, macOS quarantines everything unpacked from it, by Finder or by `tar`, and stops the unsigned `wine` with a dialog until the app or this command lifts it: `xattr -dr com.apple.quarantine ~/freequay-0.2.2`.
 
-The first `freequay new` downloads Wine Mono (82 MB) from WineHQ and, in the background, the settings per game from AppleGamingWiki (about 3 MB). `freequay fix`, which installs the runtime packages that rules ask for, needs python3 from the Command Line Tools (`xcode-select --install`), and many of those packages need `cabextract` (Homebrew); without them, Steam and games start without that setup.
+The first `freequay new` downloads Wine Mono (82 MB) from WineHQ. `freequay fix`, which installs the runtime packages that rules ask for, needs python3 from the Command Line Tools (`xcode-select --install`), and many of those packages need `cabextract` (Homebrew); without them, Steam and games start without that setup.
 
 Commands run from the release folder or the root of the repository.
 
@@ -79,7 +82,7 @@ Bottles live in `~/Library/Application Support/freequay/Bottles`. `run` starts a
 
 `programs` lists what a bottle has, one name and `run` target per line, as the app shows it. With a program after the bottle it adds that to the list, and with `-` after the program it takes it off again: an added program is forgotten, a found one hidden. The bottle keeps both in `programs.txt`.
 
-`freequay app <bottle> <program.exe|steam:ID> <backend>` sets the graphics for one program, `-` instead of the backend deletes it, and without a program the command lists the bottle's rules. `freequay rule` adds any directive, `freequay info` shows everything that applies to a program. New rules apply at the next program start, also while Steam is running. `freequay applegamingwiki` fetches the rules from AppleGamingWiki again.
+`freequay app <bottle> <program.exe|steam:ID> <backend>` sets the graphics for one program, `-` instead of the backend deletes it, and without a program the command lists the bottle's rules. `freequay rule` adds any directive, `freequay info` shows everything that applies to a program. New rules apply at the next program start, also while Steam is running. `freequay applegamingwiki` looks up the installed Steam games in AppleGamingWiki at once; `run` and `programs` do it by themselves.
 
 Steam for Windows without the app: install it with `SteamSetup.exe /S` and start `steam.exe` with `run`. Before Steam starts, `run` catches up on the one-time setup the rules ask for (`freequay fix`).
 
@@ -171,7 +174,7 @@ D3DMetal: download "Evaluation environment for Windows games" from developer.app
 
 Most of these come from Linux, where Proton runs with DXVK and Vulkan drivers; only the AppleGamingWiki rules are about the Mac. CodeWeavers' compatibility pages sit behind bot protection and are not read automatically.
 
-AppleGamingWiki's license allows no commercial use, so Freequay does not ship its rules. `freequay applegamingwiki` downloads the pages with a macOS compatibility table from applegamingwiki.com, about 3 MB at one request per second, and makes the rules in `~/Library/Application Support/freequay/compat`. The app does this when it opens, and `freequay new` and `freequay run` start it in the background whenever the rules are missing or older than 30 days; after a failed try, the next one waits an hour. Without network, programs start without these rules. The command runs `scripts/compat/applegamingwiki`, built from `applegamingwiki.swift`. Up to 0.2.1 a Python script made these rules and Freequay shipped them; on the same pages the Swift program writes what that script wrote, and on 2026-10-18 its rules matched the ones in 0.2.1.
+AppleGamingWiki's license allows no commercial use, so Freequay does not ship its rules. It looks up the Steam games installed in a bottle one by one instead, each at most once a week, with two requests: the infobox of a game's page links to steamdb.info with its Steam ID, and AppleGamingWiki's list of pages with that link names the pages Freequay then reads. `freequay run <bottle> steam:<ID>` looks up the game right before it starts; the other installed games are looked up in the background when the app lists them, and so are the games Steam installs while it runs. The rules are kept in `~/Library/Application Support/freequay/compat`. Without network a game starts without them, and the next start tries again. The rules are the same as the ones Freequay 0.2.1 made from all pages, apart from Steam IDs that a page lists only as further editions, nearly all DLC that no game starts with. Of the 85 games with a rule on 2026-10-18, all matched except One Piece Odyssey, whose rule came from a misspelled page holding a copy of GTA V's text. The program behind it is `scripts/compat/applegamingwiki.swift`, a port of the Python importer of 0.2.1.
 
 The one-time setup (winetricks verbs, registry values, Windows version) is done by `freequay fix <bottle>` for all installed Steam games. All games share a bottle, so the DLL overrides a winetricks verb sets apply only to the programs of the game that asked for it.
 
@@ -200,7 +203,7 @@ The programs under What runs need these backends, which their rules set: Steam a
 
 The release archives were tested like a new user would: downloaded with the quarantine a browser sets, unpacked into a new folder with a space in its path, with an empty home directory. With 0.1.0 all 29 graphics tests passed (Direct3D 9, 11 and 12, 32 and 64 bit, `dxmt`, `dxvk`, `wined3d`, vkd3d, and `d3dmetal` and `d3dmetal3` installed with the archive's `scripts/install-d3dmetal.sh`), and Steam installed, updated itself and showed its sign-in window. With 0.2.0 the app lifted the quarantine of its folder, created a bottle in 34 seconds with the Wine Mono download, opened Notepad from Finder, the Dock, a drop and its list within 2 to 4 seconds, installed Steam with its button and showed Steam's sign-in window about 80 seconds later. Programs started from the app stayed in the list after a restart, installers stayed out and removed entries stayed away; quick repeated clicks gave one program, and a click on an open program brought it forward. Not tested: Open Anyway for an app really downloaded with a browser. With 0.2.1, which changes the backend for Direct3D 12 and builds Wine without `pipe2`, the build folders were hidden during the test; the bottle took 31 seconds with Wine Mono copied from the build, and all 12 programs in `tests/` passed with `dxmt`, `dxvk`, `wined3d` and without `--backend`, then also with `d3dmetal` and `d3dmetal3` after `scripts/install-d3dmetal.sh` from the archive. The app and Steam were not tried again.
 
-0.2.2 makes the rules from AppleGamingWiki on the Mac. Its archive was tested the same way, with the build folders out of the test's reach. The bottle took 31 seconds, the AppleGamingWiki rules arrived in the background meanwhile (1,884 pages in under a minute), and all 12 programs passed with every backend: 48 runs without D3DMetal, 72 with it. Started as one of six Steam games, a program got the same backend, variables and AVX setting as under 0.2.1, five of them through AppleGamingWiki rules; without those rules, the five got DXMT. Steam installed from the temp folder as the app's button does it and showed its sign-in window 146 seconds after its first start. The app lifted the quarantine of 2,004 files when it opened, made the AppleGamingWiki rules within 45 seconds and started Notepad from Finder in 3 seconds.
+0.2.2 looks up the rules from AppleGamingWiki on the Mac, game by game. Its archive was tested the same way, with the build folders out of the test's reach. The bottle took 31 seconds and all 12 programs passed with every backend: 48 runs without D3DMetal, 72 with it. Started as one of seven Steam games, a program got the same backend, variables and AVX setting as under 0.2.1. The 85 games with a rule on 2026-10-18 got the same rules as from all pages, except One Piece Odyssey (see Rules from open sources). A game started with `run steam:<ID>` was looked up in about a second, without network the start went on after two seconds without the rules, and a game Steam installed while it ran was looked up within a minute. Steam installed from the temp folder as the app's button does it. The app lifted the quarantine of 1,933 files when it opened, looked up nothing before its note on downloads was read and the installed game three seconds after, and started Notepad from Finder in two seconds.
 
 `tests/` has the small programs behind these tests; build them with mingw-w64 as their first comment says. `tests/rulecheck` shows what the rules changed for a program: its path, command line, environment variables and where `d3d11.dll` comes from.
 
