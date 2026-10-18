@@ -41,6 +41,8 @@ Directives at program start:
 | `argdel=<text>` | remove from the command line |
 | `exe=<from>><to>` | instead of the program whose path ends in `<from>`, start `<to>` (relative to it, `..` allowed), for instance to skip a broken launcher |
 
+A program without a `backend` rule, or with one for a backend that is not installed, gets the bottle's default (`dxmt`, or the one from `freequay run --backend`). `dxmt` and `dxvk` have no Direct3D 12, so a program that imports `d3d12.dll`, directly or delay-loaded, gets `d3dmetal` (or `d3dmetal3`) instead when D3DMetal is installed and the program is 64-bit, and `wined3d` otherwise, where Wine's d3d12 runs on vkd3d. Without D3DMetal, a program that imports `d3d11.dll` as well keeps `dxmt` or `dxvk`: Unreal Engine games import both, and most of them run on Direct3D 11.
+
 `args`, `argdel` and `exe` from a `steam:` key only apply to the first program of the game below `steamapps\common`: not to installers of runtime libraries, crash reporters or programs the game starts itself. ntdll sets `FREEQUAY_STEAM_LAUNCH` after that.
 
 `exe=` only replaces the program when both are built the same way (32 or 64 bit).
@@ -68,4 +70,4 @@ scripts/freequay info "Grand Theft Auto IV"
 scripts/freequay fix games --list
 ```
 
-`WINEDEBUG=+freequay` shows which rules a program got.
+`WINEDEBUG=+freequay` shows which rules a program got and which backend a Direct3D 12 program gets.
