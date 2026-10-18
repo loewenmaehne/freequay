@@ -6,7 +6,7 @@ Freequay runs Windows games and programs on Apple Silicon Macs, for free: Wine b
 
 ## Download
 
-You need an Apple Silicon Mac with Rosetta 2 and about 1.5 GB of free disk space; Steam takes another 1.5 GB, plus your games. Most Macs got Rosetta 2 with the first Intel app they opened; otherwise run `softwareupdate --install-rosetta` once in Terminal.
+You need an Apple Silicon Mac with macOS 14 or newer, Rosetta 2 and about 1.5 GB of free disk space; Steam takes another 1.5 GB, plus your games. Most Macs got Rosetta 2 with the first Intel app they opened; otherwise run `softwareupdate --install-rosetta` once in Terminal.
 
 1. Download `freequay-0.2.1-macos.tar.xz` from the [latest release](https://github.com/loewenmaehne/freequay/releases/latest) and double-click it in Finder. That unpacks the folder `freequay-0.2.1`.
 2. Open `Freequay.app` in that folder. The first time, macOS refuses it because the app is not notarized by Apple: open System Settings, Privacy & Security, click Open Anyway next to the note about Freequay and confirm. After that it opens normally.
@@ -16,7 +16,7 @@ Leave the app in its folder: it finds the rest of Freequay next to itself. Drag 
 
 ## What runs
 
-Tested on a MacBook Air M1 with 16 GB and macOS 27.0.1. Few games have been tried so far; reports are welcome as issues.
+Tested on a MacBook Air M1 with 16 GB and macOS 27.0.1, not yet on an older macOS. Few games have been tried so far; reports are welcome as issues.
 
 | Program | Result |
 |---|---|
@@ -97,6 +97,8 @@ Freequay is not affiliated with, endorsed by or supported by CodeWeavers or Appl
 - Rules per program: the open counterpart of CrossOver's closed compatibility database, filled from AppleGamingWiki, umu-protonfixes, Proton, ProtonDB and DXVK (see below).
 - `Freequay.app` and `scripts/freequay`, the launcher for bottles that it calls.
 
+Wine is built for macOS 11 and newer, MoltenVK for macOS 12 and the app for macOS 13. DXMT names macOS 14 as its minimum and recommends macOS 15; its release 0.80 is built for macOS 15. So every part is meant to run on macOS 14 and newer.
+
 ### What is not in it
 
 Nothing from the CrossOver app itself: not its user interface, no CrossTie installers, no D3DMetal from CrossOver and not CodeWeavers' compatibility database. GStreamer is not built yet.
@@ -131,6 +133,8 @@ scripts/install-dxmt.sh       # DXMT in dist/backends/dxmt
 scripts/install-mono.sh       # Wine Mono for new bottles
 scripts/compat/update.sh      # rules from the open sources, optional: compat/ has a recent copy
 ```
+
+`build-wine.sh` builds Wine for macOS 11 and newer and leaves out `pipe2`. The macOS 27 SDK has that function and older macOS does not; Wine calls it without checking, so with it Wine would most likely not start on macOS 26 and older. Releases up to 0.2.0 were built with it.
 
 D3DMetal: download "Evaluation environment for Windows games" from developer.apple.com, mount it and run `scripts/install-d3dmetal.sh "/Volumes/<volume>"`; pass `d3dmetal3` as the second argument for version 3.0. The script is in the release archive too; install D3DMetal again after replacing the folder with a newer release.
 
@@ -187,7 +191,7 @@ Graphics tests from 2026-10-13 on a MacBook Air M1 with macOS 27.0.1; the progra
 
 The programs under What runs need these backends, which their rules set: Steam and the Rockstar Games Launcher run with `wined3d`; with `dxmt` both abort at `SwapDeviceContextState`, the launcher with `dxvk` at `DXGID3D10CreateDevice`. Steam's window shows with patch 0003. Team Fortress 2 runs with `wined3d`, starts with patch 0004 and quits cleanly with patch 0006; with `dxvk` its image stayed black before patch moltenvk-0002 and was not tried again. The FFXIV benchmark ran with `dxmt`, its launcher on Wine Mono; a clean comparison of all backends is still open.
 
-The release archives were tested like a new user would: downloaded with the quarantine a browser sets, unpacked into a new folder with a space in its path, with an empty home directory. With 0.1.0 all 29 graphics tests passed (Direct3D 9, 11 and 12, 32 and 64 bit, `dxmt`, `dxvk`, `wined3d`, vkd3d, and `d3dmetal` and `d3dmetal3` installed with the archive's `scripts/install-d3dmetal.sh`), and Steam installed, updated itself and showed its sign-in window. With 0.2.0 the app lifted the quarantine of its folder, created a bottle in 34 seconds with the Wine Mono download, opened Notepad from Finder, the Dock, a drop and its list within 2 to 4 seconds, installed Steam with its button and showed Steam's sign-in window about 80 seconds later. Programs started from the app stayed in the list after a restart, installers stayed out and removed entries stayed away; quick repeated clicks gave one program, and a click on an open program brought it forward. Not tested: Open Anyway for an app really downloaded with a browser. With 0.2.1, whose only change is the backend for Direct3D 12, the build folders were hidden during the test; the bottle took 35 seconds with the Wine Mono download, and all 12 programs in `tests/` passed with `dxmt`, `dxvk`, `wined3d` and without `--backend`, then also with `d3dmetal` and `d3dmetal3` after `scripts/install-d3dmetal.sh` from the archive. The app and Steam were not tried again.
+The release archives were tested like a new user would: downloaded with the quarantine a browser sets, unpacked into a new folder with a space in its path, with an empty home directory. With 0.1.0 all 29 graphics tests passed (Direct3D 9, 11 and 12, 32 and 64 bit, `dxmt`, `dxvk`, `wined3d`, vkd3d, and `d3dmetal` and `d3dmetal3` installed with the archive's `scripts/install-d3dmetal.sh`), and Steam installed, updated itself and showed its sign-in window. With 0.2.0 the app lifted the quarantine of its folder, created a bottle in 34 seconds with the Wine Mono download, opened Notepad from Finder, the Dock, a drop and its list within 2 to 4 seconds, installed Steam with its button and showed Steam's sign-in window about 80 seconds later. Programs started from the app stayed in the list after a restart, installers stayed out and removed entries stayed away; quick repeated clicks gave one program, and a click on an open program brought it forward. Not tested: Open Anyway for an app really downloaded with a browser. With 0.2.1, which changes the backend for Direct3D 12 and builds Wine without `pipe2`, the build folders were hidden during the test; the bottle took 31 seconds with Wine Mono copied from the build, and all 12 programs in `tests/` passed with `dxmt`, `dxvk`, `wined3d` and without `--backend`, then also with `d3dmetal` and `d3dmetal3` after `scripts/install-d3dmetal.sh` from the archive. The app and Steam were not tried again.
 
 `tests/` has the small programs behind these tests; build them with mingw-w64 as their first comment says. `tests/rulecheck` shows what the rules changed for a program: its path, command line, environment variables and where `d3d11.dll` comes from.
 
