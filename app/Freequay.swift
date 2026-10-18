@@ -91,16 +91,28 @@ final class Model: ObservableObject {
     private var watch: Task<Void, Never>?
     private var opened: [String: Set<pid_t>] = [:]  // program -> processes of the windows it opened
 
-    let root: URL?  // the Freequay folder
-    private let bottlesDir: URL  // as in scripts/freequay
+    let root: URL?  // the Freequay folder, inside the app or around it
+    let onDiskImage: Bool  // opened right on the read-only disk image
+    private let dataDir: URL  // ~/Library/Application Support/freequay, as in scripts/freequay
+    private let bottlesDir: URL
+
+    // D3DMetal is Apple's and never part of Freequay: the app leads to Apple's download and installs it
+    // from the user's disk image into dataDir/backends (scripts/install-d3dmetal.sh)
+    enum D3DMetal: Equatable { case waiting, found(URL), installing, done(String), failed(String) }
+    @Published var d3dmetal = D3DMetal.waiting
+    @Published var addingD3DMetal = false  // its sheet is open
+    private var d3dmetalTask: Task<Void, Never>?
+    static let appleDownload = URL(string: "https://developer.apple.com/download/all/?q=Evaluation%20environment%20for%20Windows%20games")!
 
     private static let steamSetup = URL(string: "https://cdn.cloudflare.steamstatic.com/client/installer/SteamSetup.exe")!
 
     init() {
         let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
-        bottlesDir = URL(fileURLWithPath: home).appendingPathComponent("Library/Application Support/freequay/Bottles")
+        dataDir = URL(fileURLWithPath: home).appendingPathComponent("Library/Application Support/freequay")
+        bottlesDir = dataDir.appendingPathComponent("Bottles")
         root = Model.folder()
-        guard root != nil else { return }
+        onDiskImage = root.map { (try? $0.resourceValues(forKeys: [.volumeIsReadOnlyKey]).volumeIsReadOnly) == true } ?? false
+        guard root != nil, !onDiskImage else { return }
         liftQuarantine()
         reload()
     }
@@ -111,14 +123,15 @@ final class Model: ObservableObject {
         reload()  // now the launcher may look up the Steam games in AppleGamingWiki
     }
 
-    // The folder around the app, if scripts/freequay is in it. macOS runs a downloaded app that
-    // nobody has moved from a read-only copy without that folder (App Translocation);
-    // Security.framework knows where the original is.
+    // Where scripts/freequay is: inside the app, as released, or in the folder around it, as in the
+    // repository. macOS runs a downloaded app that nobody has moved from a read-only copy (App
+    // Translocation); Security.framework knows where the original is.
     private static func folder() -> URL? {
         var app = Bundle.main.bundleURL
         if app.path.contains("/AppTranslocation/"), let original = untranslocated(app) { app = original }
-        let root = app.deletingLastPathComponent()
-        return FileManager.default.fileExists(atPath: root.appendingPathComponent("scripts/freequay").path) ? root : nil
+        return [app.appendingPathComponent("Contents/SharedSupport/freequay"), app.deletingLastPathComponent()].first {
+            FileManager.default.fileExists(atPath: $0.appendingPathComponent("scripts/freequay").path)
+        }
     }
 
     private static func untranslocated(_ url: URL) -> URL? {
@@ -372,16 +385,86 @@ final class Model: ObservableObject {
         launch(["kill", bottle]) { [weak self] _, _ in self?.status = "Stopped all programs in \(bottle)." }
     }
 
+    var hasD3DMetal: Bool {
+        ["d3dmetal", "d3dmetal3"].contains { FileManager.default.fileExists(atPath: dataDir.appendingPathComponent("backends/" + $0).path) }
+    }
+
+    // Opens the sheet and looks for Apple's disk image in Downloads (FREEQUAY_DOWNLOADS for tests) until
+    // it is there; the user downloads it from Apple's page, with an Apple Account.
+    func addD3DMetal() {
+        addingD3DMetal = true
+        d3dmetal = .waiting
+        let downloads = ProcessInfo.processInfo.environment["FREEQUAY_DOWNLOADS"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
+        d3dmetalTask?.cancel()
+        d3dmetalTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let names = (try? FileManager.default.contentsOfDirectory(atPath: downloads.path)) ?? []
+                let images = names.filter {
+                    let name = $0.lowercased()
+                    return name.hasSuffix(".dmg") && (name.hasPrefix("evaluation_environment_for_windows_games")
+                                                      || name.hasPrefix("game_porting_toolkit"))
+                }
+                if let newest = images.sorted().last {
+                    self?.d3dmetal = .found(downloads.appendingPathComponent(newest))
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
+    }
+
+    // Opens the disk image, where macOS shows Apple's license; once it is mounted, the script copies
+    // D3DMetal out of it, and the image is ejected again.
+    func installD3DMetal(_ image: URL) {
+        d3dmetal = .installing
+        NSWorkspace.shared.open(image)
+        d3dmetalTask?.cancel()
+        d3dmetalTask = Task { [weak self] in
+            let started = Date()
+            while !Task.isCancelled, Date().timeIntervalSince(started) < 600 {
+                if let volume = Model.portingToolkitVolume() {
+                    self?.launch(["--d3dmetal", volume.path]) { code, output in
+                        _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/hdiutil"), arguments: ["detach", "-quiet", volume.path])
+                        guard let self else { return }
+                        let line = output.split(separator: "\n").last(where: { $0.hasPrefix("D3DMetal ") }).map(String.init)
+                        self.d3dmetal = code == 0 ? .done(line ?? "D3DMetal is installed.") : .failed(Model.error(in: output) ?? output)
+                    }
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+            if !Task.isCancelled { self?.d3dmetal = .failed("The disk image did not open. Open it in Finder and agree to Apple's license.") }
+        }
+    }
+
+    func closeD3DMetal() {
+        d3dmetalTask?.cancel()
+        addingD3DMetal = false
+    }
+
+    // a mounted Game Porting Toolkit: a volume with redist/lib/wine at most two folders down
+    nonisolated private static func portingToolkitVolume() -> URL? {
+        let fm = FileManager.default
+        for volume in fm.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: [.skipHiddenVolumes]) ?? [] {
+            for base in [volume] + ((try? fm.contentsOfDirectory(at: volume, includingPropertiesForKeys: nil)) ?? []) {
+                if fm.fileExists(atPath: base.appendingPathComponent("redist/lib/wine").path) { return volume }
+            }
+        }
+        return nil
+    }
+
     func showFiles() {
         NSWorkspace.shared.open(bottlesDir.appendingPathComponent(bottle).appendingPathComponent("drive_c"))
     }
 
-    // scripts/freequay with these arguments
+    // scripts/freequay with these arguments; --d3dmetal <volume> runs scripts/install-d3dmetal.sh instead
     private func launcher(_ arguments: [String]) -> Process? {
         guard let root else { return nil }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = [root.appendingPathComponent("scripts/freequay").path] + arguments
+        let script = arguments.first == "--d3dmetal" ? "scripts/install-d3dmetal.sh" : "scripts/freequay"
+        process.arguments = [root.appendingPathComponent(script).path] + arguments.drop { $0 == "--d3dmetal" }
         process.currentDirectoryURL = root
         process.standardInput = FileHandle.nullDevice
         if servers { process.environment = ProcessInfo.processInfo.environment.merging(["FREEQUAY_OFFLINE": "1"]) { $1 } }
@@ -454,8 +537,12 @@ struct ContentView: View {
             Text("Windows programs on your Mac").font(.system(size: 14)).foregroundStyle(muted).padding(.top, 1)
             if model.root == nil {
                 quay {
-                    note("Freequay.app has to stay in its folder",
-                         "Put it back next to the folders scripts and dist, then open it again.")
+                    note("Freequay.app is missing its parts", "Download Freequay again and drag it into Applications.")
+                }
+            } else if model.onDiskImage {
+                quay {
+                    note("Drag Freequay into Applications", "Then open it from there. On the disk image it cannot start programs.",
+                         arrow: true)
                 }
             } else {
                 bottleRow.padding(.top, 22)
@@ -466,6 +553,14 @@ struct ContentView: View {
                         Text("Steam for Windows from Valve, about 1.5 GB").font(.system(size: 12.5)).foregroundStyle(muted)
                     }
                     .padding(.top, 16)
+                }
+                if !model.bottles.isEmpty && !model.hasD3DMetal {
+                    HStack(spacing: 14) {
+                        Button("Add D3DMetal…") { model.addD3DMetal() }.buttonStyle(Quiet())
+                        Text("Apple's DirectX 12 for many newer games, from Apple's download").font(.system(size: 12.5)).foregroundStyle(muted)
+                    }
+                    .padding(.top, 12)
+                    .sheet(isPresented: $model.addingD3DMetal) { AddD3DMetal(model: model).interactiveDismissDisabled() }
                 }
             }
             HStack(spacing: 8) {
@@ -622,7 +717,8 @@ struct Servers: View {
         ("AppleGamingWiki", "settings for your Steam games, CC\u{00A0}BY\u{2011}NC\u{2011}SA\u{00A0}3.0"),  // kept on one line
         ("WineHQ", "Wine Mono, when you create a bottle"),
         ("Valve", "Steam, when you install it"),
-        ("GitHub, Microsoft", "winetricks and the runtime packages games ask for"),
+        ("GitHub", "winetricks, when a game needs runtime packages"),
+        ("Microsoft, mirrors", "the runtime packages games ask for"),
         ("Apple", "D3DMetal, only if you add it yourself"),
     ]
 
@@ -651,6 +747,72 @@ struct Servers: View {
         .padding(24)
         .frame(width: 440)
         .background(Color.white)
+    }
+}
+
+// Apple's D3DMetal in three steps: Apple's download page, the disk image found in Downloads, and the
+// installation after the note on Apple's license
+struct AddD3DMetal: View {
+    @ObservedObject var model: Model
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("D3DMetal from Apple").font(.system(size: 19, weight: .bold)).foregroundStyle(ink)
+            Text("D3DMetal runs many DirectX 11 and 12 games on Metal. Apple offers it for free to anyone with an Apple Account, "
+                 + "as \u{201C}Evaluation environment for Windows games\u{201D}; Freequay is not allowed to include it.")
+                .font(.system(size: 13)).foregroundStyle(muted).fixedSize(horizontal: false, vertical: true).padding(.top, 6)
+            switch model.d3dmetal {
+            case .waiting:
+                Button("Open Apple's download page") { NSWorkspace.shared.open(Model.appleDownload) }.buttonStyle(Solid()).padding(.top, 16)
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Download the newest version there. Freequay finds it in your Downloads folder.")
+                        .font(.system(size: 12.5)).foregroundStyle(muted).fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, 14)
+            case .found(let image):
+                Text("Found version \(AddD3DMetal.version(image)) in your Downloads folder.")
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(ink).padding(.top, 16)
+                Text("D3DMetal belongs to Apple. Apple's license comes with the download and allows using D3DMetal to develop, "
+                     + "test and evaluate games. By clicking Install you agree to it.")
+                    .font(.system(size: 13)).foregroundStyle(muted).fixedSize(horizontal: false, vertical: true).padding(.top, 6)
+            case .installing:
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("If macOS shows Apple's license, agree to it; Freequay then copies D3DMetal.")
+                        .font(.system(size: 12.5)).foregroundStyle(muted).fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, 16)
+            case .done(let message):
+                Text(message).font(.system(size: 13, weight: .semibold)).foregroundStyle(ink).padding(.top, 16)
+                Text("Programs that need it get it by themselves.").font(.system(size: 13)).foregroundStyle(muted).padding(.top, 4)
+            case .failed(let message):
+                Text(message).font(.system(size: 13)).foregroundStyle(ink).fixedSize(horizontal: false, vertical: true).padding(.top, 16)
+            }
+            HStack(spacing: 16) {
+                Spacer()
+                switch model.d3dmetal {
+                case .found(let image):
+                    Button("Cancel") { model.closeD3DMetal() }.buttonStyle(Quiet()).keyboardShortcut(.cancelAction)
+                    Button("Install") { model.installD3DMetal(image) }.buttonStyle(Solid()).keyboardShortcut(.defaultAction)
+                case .done, .failed:
+                    Button("Done") { model.closeD3DMetal() }.buttonStyle(Solid()).keyboardShortcut(.defaultAction)
+                default:
+                    Button("Cancel") { model.closeD3DMetal() }.buttonStyle(Quiet()).keyboardShortcut(.cancelAction)
+                }
+            }
+            .padding(.top, 20)
+        }
+        .padding(24)
+        .frame(width: 420)
+        .background(Color.white)
+    }
+
+    // Evaluation_environment_for_Windows_games_4.0_beta_2.dmg -> 4.0 beta 2
+    static func version(_ image: URL) -> String {
+        let name = image.deletingPathExtension().lastPathComponent
+        let digits = name.firstIndex(where: \.isNumber) ?? name.endIndex
+        return name[digits...].replacingOccurrences(of: "_", with: " ").trimmingCharacters(in: .whitespaces)
     }
 }
 

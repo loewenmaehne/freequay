@@ -6,17 +6,17 @@ Freequay runs Windows games and programs on Apple Silicon Macs, for free: Wine b
 
 ## Download
 
-You need an Apple Silicon Mac with macOS 14 or newer, Rosetta 2 and about 1.5 GB of free disk space; Steam takes another 1.5 GB, plus your games. Most Macs got Rosetta 2 with the first Intel app they opened; otherwise run `softwareupdate --install-rosetta` once in Terminal.
+You need an Apple Silicon Mac with macOS 14 or newer, Rosetta 2 and about 1.5 GB of free disk space; Steam takes another 1.5 GB, plus your games. Neither Xcode, its Command Line Tools nor Homebrew are needed. Most Macs got Rosetta 2 with the first Intel app they opened; otherwise run `softwareupdate --install-rosetta` once in Terminal.
 
-1. Download `freequay-0.2.2-macos.tar.xz` from the [latest release](https://github.com/loewenmaehne/freequay/releases/latest) and double-click it in Finder. That unpacks the folder `freequay-0.2.2`.
-2. Open `Freequay.app` in that folder. The first time, macOS refuses it because the app is not notarized by Apple: open System Settings, Privacy & Security, click Open Anyway next to the note about Freequay and confirm. After that it opens normally.
-3. Click Create a bottle, a Windows drive of its own (about a minute). Then install Steam with its button, or drop the installer of a Windows program on the window.
+1. Download `Freequay-0.3.0.dmg` from the [latest release](https://github.com/loewenmaehne/freequay/releases/latest) and open it.
+2. Drag Freequay into Applications and open it there. The first time, macOS refuses it because the app is not notarized by Apple: open System Settings, Privacy & Security, click Open Anyway next to the note about Freequay and confirm. After that it opens normally.
+3. The app lists once which servers Freequay downloads from. Then click Create a bottle, a Windows drive of its own (about a minute, with the download of Wine Mono), and install Steam with its button, or drop the installer of a Windows program on the window.
 
 A bottle is not a sandbox. Wine shows your whole Mac to Windows programs as drive Z:, so they can read and change all your files, just as a Mac program can. Only start Windows programs you trust.
 
 Freequay itself collects no data. It downloads from AppleGamingWiki (settings for your Steam games), WineHQ (Wine Mono for a new bottle), Valve (Steam, when you install it), GitHub (winetricks), Microsoft and others through winetricks (runtime packages games ask for) and, only if you add it yourself, Apple (D3DMetal).
 
-Leave the app in its folder: it finds the rest of Freequay next to itself. Drag it into the Dock to keep it at hand. Bottles and the settings from AppleGamingWiki live outside the folder, so a newer release can replace it.
+Everything Freequay needs is inside the app. What it downloads later, your bottles and D3DMetal live in `~/Library/Application Support/freequay`, so a newer Freequay replaces the app and keeps them.
 
 ## What runs
 
@@ -30,7 +30,7 @@ Tested on a MacBook Air M1 with 16 GB and macOS 27.0.1, not yet on an older macO
 | Rockstar Games Launcher with Social Club | installs, updates itself, signs in and opens its main window |
 | Black Myth: Wukong Benchmark Tool (Direct3D 12, D3DMetal) | hangs while loading, then Unreal's crash reporter comes up |
 
-Games that play videos through Media Foundation may show them black, because GStreamer is not built yet. Apple's D3DMetal (Direct3D 11 and 12) is not included; you can add it from Apple's own download (see Build). Without it, Direct3D 12 runs on Wine's own d3d12 with vkd3d, tried so far only with small test programs.
+Games that play videos through Media Foundation may show them black, because GStreamer is not built yet. Apple's D3DMetal (Direct3D 11 and 12) is not included; the app leads you to Apple's own download and installs it from there. Without it, Direct3D 12 runs on Wine's own d3d12 with vkd3d, tried so far only with small test programs.
 
 ## Using the app
 
@@ -41,41 +41,44 @@ Games that play videos through Media Foundation may show them black, because GSt
 - A right click takes a program off the list. Nothing is deleted or uninstalled.
 - Show files opens the bottle's drive C: in Finder; Stop all programs ends every program of the bottle. Programs keep running when the app quits.
 - If a program lies in Downloads, Documents or on the Desktop, macOS asks whether Freequay may access that folder. Allow it, or Wine cannot read the program.
-- When it starts, the app lifts the download quarantine from its own folder. Without that, macOS would stop the unsigned `wine`.
+- Add D3DMetal opens Apple's download page for "Evaluation environment for Windows games", free with an Apple Account. Freequay finds the disk image in Downloads, notes that D3DMetal is Apple's and under Apple's license, which allows using it to develop, test and evaluate games, and installs it when you click Install. If macOS shows Apple's license as the image opens, agree to it.
+- When it starts, the app lifts the download quarantine from what it carries inside. Without that, macOS would stop the unsigned `wine`. Opened right on the disk image, it asks to be moved to Applications first.
 - The first time it opens, the app lists the servers Freequay downloads from, and why. Freequay itself collects no data.
 - The settings for your Steam games come from AppleGamingWiki: the app looks up each installed game there, at most once a week (see Rules from open sources).
 
-Everything else, such as the graphics per program, is done in Terminal with `scripts/freequay`, the launcher the app calls as well.
+Everything else, such as the graphics per program, is done in Terminal with `freequay`, the launcher the app calls as well.
 
 ## With Terminal
 
 ```bash
 cd ~
-curl -LO https://github.com/loewenmaehne/freequay/releases/download/v0.2.2/freequay-0.2.2-macos.tar.xz
-tar -xf freequay-0.2.2-macos.tar.xz
-cd freequay-0.2.2
-scripts/freequay new games
+curl -LO https://github.com/loewenmaehne/freequay/releases/download/v0.3.0/Freequay-0.3.0.dmg
+hdiutil attach -nobrowse -mountpoint /tmp/freequay Freequay-0.3.0.dmg
+cp -R /tmp/freequay/Freequay.app /Applications/
+hdiutil detach /tmp/freequay
+alias freequay=/Applications/Freequay.app/Contents/SharedSupport/freequay/scripts/freequay
+freequay new games
 ```
 
-curl sets no quarantine. After a browser download, macOS quarantines everything unpacked from it, by Finder or by `tar`, and stops the unsigned `wine` with a dialog until the app or this command lifts it: `xattr -dr com.apple.quarantine ~/freequay-0.2.2`.
+curl sets no quarantine, so this needs no Open Anyway. After a browser download, macOS quarantines everything copied out of the disk image and stops the unsigned `wine` with a dialog until the app or this command lifts it: `xattr -dr com.apple.quarantine /Applications/Freequay.app`.
 
-The first `freequay new` downloads Wine Mono (82 MB) from WineHQ. `freequay fix`, which installs the runtime packages that rules ask for, needs python3 from the Command Line Tools (`xcode-select --install`), and many of those packages need `cabextract` (Homebrew); without them, Steam and games start without that setup.
+The first `freequay new` downloads Wine Mono (82 MB) from WineHQ. `freequay fix` installs the runtime packages that rules ask for with winetricks, without the Command Line Tools or Homebrew: Freequay brings its own `cabextract`, which unpacks with the bsdtar of macOS.
 
-Commands run from the release folder or the root of the repository.
+The commands run from anywhere; in a checkout of the repository, `scripts/freequay` is the same launcher.
 
 ```bash
-scripts/freequay new games
-scripts/freequay run games --backend dxmt "/path/to/Game.exe"
-scripts/freequay run games "$HOME/Library/Application Support/freequay/Bottles/games/drive_c/Program Files (x86)/Steam/steam.exe"
-scripts/freequay run games steam:440
-scripts/freequay programs games
-scripts/freequay programs games "/path/to/Game.exe"
-scripts/freequay programs games "/path/to/Game.exe" -
-scripts/freequay app games tf_win64.exe wined3d
-scripts/freequay info games steam:440
-scripts/freequay info "Grand Theft Auto IV"
-scripts/freequay fix games --list
-scripts/freequay applegamingwiki
+freequay new games
+freequay run games --backend dxmt "/path/to/Game.exe"
+freequay run games "$HOME/Library/Application Support/freequay/Bottles/games/drive_c/Program Files (x86)/Steam/steam.exe"
+freequay run games steam:440
+freequay programs games
+freequay programs games "/path/to/Game.exe"
+freequay programs games "/path/to/Game.exe" -
+freequay app games tf_win64.exe wined3d
+freequay info games steam:440
+freequay info "Grand Theft Auto IV"
+freequay fix games --list
+freequay applegamingwiki
 ```
 
 Bottles live in `~/Library/Application Support/freequay/Bottles`. `run` starts a Windows program, a shortcut (`.lnk`) or a Steam game by its ID (`steam:440`, which Steam starts with `-applaunch`), and takes `--backend`, `--avx` (Rosetta reports AVX to the game), `--hud` (Metal performance HUD) and `--debug`. A program without a rule gets the bottle's default backend (`dxmt`, change it with `freequay set <bottle> backend <name>`) or the one from `--backend`. `dxmt` and `dxvk` have no Direct3D 12, so a program that imports `d3d12.dll` gets `d3dmetal` instead when it is installed, otherwise `wined3d`; without D3DMetal, programs that import `d3d11.dll` as well, as Unreal Engine games do, keep the default (details in `compat/README.md`).
@@ -100,10 +103,10 @@ Freequay is not affiliated with, endorsed by or supported by CodeWeavers or Appl
   - `dxmt`: DXMT 0.80 (Feifan He, MIT; versions after 0.80 are LGPL-2.1), Direct3D 10 and 11 on Metal.
   - `dxvk`: DXVK 1.10.3, CodeWeavers' Mac version from the same package (zlib), Direct3D 9 and 11 over Vulkan, with CodeWeavers' MoltenVK (Apache-2.0), which emulates geometry shaders.
   - `wined3d`: Wine's own Direct3D up to version 11; on the Mac CodeWeavers send Direct3D 10 and 11 through Vulkan. Direct3D 12 runs on Wine's d3d12 with vkd3d over MoltenVK.
-  - `d3dmetal` and `d3dmetal3`: Apple's D3DMetal from the Game Porting Toolkit 4.0 beta 2 and 3.0, Direct3D 11 and 12. Only if you download it from Apple yourself; Apple's license applies.
-- Wine Mono from WineHQ for .NET programs; every new bottle gets it. The release archive leaves it out, the first new bottle downloads it.
-- Rules per program: the open counterpart of CrossOver's closed compatibility database, filled from umu-protonfixes, Proton, ProtonDB and DXVK. The rules from AppleGamingWiki are not in the archive; Freequay makes them on your Mac (see below).
-- `Freequay.app` and `scripts/freequay`, the launcher for bottles that it calls.
+  - `d3dmetal` and `d3dmetal3`: Apple's D3DMetal from the Game Porting Toolkit 4.0 beta 2 and 3.0, Direct3D 11 and 12. Never included: you download it from Apple yourself, and Apple's license applies; the app then installs it.
+- Wine Mono from WineHQ for .NET programs; every new bottle gets it. Freequay does not ship it, the first new bottle downloads it.
+- Rules per program: the open counterpart of CrossOver's closed compatibility database, filled from umu-protonfixes, Proton, ProtonDB and DXVK. The rules from AppleGamingWiki are not included; Freequay looks them up on your Mac (see below).
+- `Freequay.app`, with all of the above inside, and `scripts/freequay`, the launcher for bottles that it calls, with its helpers: `applegamingwiki`, `fix` for the one-time setup with winetricks, and `cabextract`, which unpacks Microsoft's cabinet files with the bsdtar of macOS.
 
 Wine is built for macOS 11 and newer, MoltenVK for macOS 12 and the app for macOS 13. DXMT names macOS 14 as its minimum and recommends macOS 15; its release 0.80 is built for macOS 15. So every part is meant to run on macOS 14 and newer.
 
@@ -144,9 +147,9 @@ scripts/compat/update.sh      # rules from the open sources, optional: compat/ h
 
 `build-wine.sh` builds Wine for macOS 11 and newer and leaves out `pipe2`. The macOS 27 SDK has that function and older macOS does not; Wine calls it without checking, so with it Wine would most likely not start on macOS 26 and older. Releases up to 0.2.0 were built with it.
 
-D3DMetal: download "Evaluation environment for Windows games" from developer.apple.com, mount it and run `scripts/install-d3dmetal.sh "/Volumes/<volume>"`; pass `d3dmetal3` as the second argument for version 3.0. The script is in the release archive too; install D3DMetal again after replacing the folder with a newer release.
+D3DMetal: the app leads to Apple's download and installs it. Without the app, download "Evaluation environment for Windows games" from developer.apple.com, mount it and run `scripts/install-d3dmetal.sh "/Volumes/<volume>"`. It installs D3DMetal 4 as `d3dmetal` and version 3 as `d3dmetal3` into `~/Library/Application Support/freequay/backends`, where it stays when Freequay is updated.
 
-`scripts/build-app.sh` builds `Freequay.app` into the root of the repository with swiftc from Xcode or the Command Line Tools, and `scripts/compat/applegamingwiki`, which makes the rules from AppleGamingWiki. `scripts/package.sh 0.2.2` builds both as well and packs the build with the launcher, the app, the rules and the license texts into `out/freequay-0.2.2-macos.tar.xz`, the release archive.
+`scripts/build-app.sh` builds `Freequay.app` into the root of the repository with swiftc from Xcode or the Command Line Tools, and the helpers in `scripts/compat`: `applegamingwiki`, `fix` and `cabextract`. `scripts/package.sh 0.3.0` builds them as well, puts the build with the launcher, the rules and the license texts into `Freequay.app/Contents/SharedSupport/freequay`, signs the app with `scripts/sign.sh` and packs it into `out/Freequay-0.3.0.dmg`, the release disk image. `sign.sh` signs every Mach-O file with the hardened runtime and the entitlements Wine needs (`app/Freequay.entitlements`); without an identity the signature is ad hoc, with a Developer ID (Apple's developer program) the same call signs for notarization, which then only needs `xcrun notarytool` and `xcrun stapler`.
 
 ## Patches
 
@@ -180,7 +183,7 @@ The one-time setup (winetricks verbs, registry values, Windows version) is done 
 
 ## Tests
 
-Graphics tests from 2026-10-13 on a MacBook Air M1 with macOS 27.0.1; the programs in `tests/` ran again with every backend on 2026-10-18 for 0.2.1 and 0.2.2:
+Graphics tests from 2026-10-13 on a MacBook Air M1 with macOS 27.0.1; the programs in `tests/` ran again with every backend on 2026-10-18 for 0.2.1, 0.2.2 and 0.3.0:
 
 | Test | Result |
 |---|---|
@@ -205,17 +208,19 @@ The release archives were tested like a new user would: downloaded with the quar
 
 0.2.2 looks up the rules from AppleGamingWiki on the Mac, game by game. Its archive was tested the same way, with the build folders out of the test's reach. The bottle took 31 seconds and all 12 programs passed with every backend: 48 runs without D3DMetal, 72 with it. Started as one of seven Steam games, a program got the same backend, variables and AVX setting as under 0.2.1. The 85 games with a rule on 2026-10-18 got the same rules as from all pages, except One Piece Odyssey (see Rules from open sources). A game started with `run steam:<ID>` was looked up in about a second, without network the start went on after two seconds without the rules, and a game Steam installed while it ran was looked up within a minute. Steam installed from the temp folder as the app's button does it. The app lifted the quarantine of 1,933 files when it opened, looked up nothing before its note on downloads was read and the installed game three seconds after, and started Notepad from Finder in two seconds.
 
+0.3.0 is one app on a disk image. The image carried the quarantine of a browser download; the app was copied out of it and opened with an empty home directory, with the build folders out of reach and the Command Line Tools' `python3`, `lipo` and `otool` blocked. The app lifted the quarantine of what it carries. The first bottle took 37 seconds with Wine Mono downloaded from WineHQ into the data folder, and the app's signature stayed valid, so nothing was written into the app. All 12 programs passed with every backend: 48 runs without D3DMetal, 72 after the app installed D3DMetal 4.0 beta 2 and 3.0 from disk images in Downloads named and laid out like Apple's. After the app was moved to another folder, they passed again with `dxmt`, `d3dmetal` and `d3dmetal3`. `freequay fix` set up a Steam game with DirectX packages in 62 seconds, without python3 or Homebrew. Steam installed and showed its sign-in window on its second start, and the app started Notepad from Finder in under a second. Not tried: Apple's download page itself, which needs an Apple Account, and Open Anyway for an app downloaded with a browser.
+
 `tests/` has the small programs behind these tests; build them with mingw-w64 as their first comment says. `tests/rulecheck` shows what the rules changed for a program: its path, command line, environment variables and where `d3d11.dll` comes from.
 
 ## Folders
 
-`downloads/` source packages, `sources/` unpacked and patched sources, `build/` build trees, `deps/` x86_64 libraries, `dist/` the finished build with its backends, `out/` release archives, `tools/` meson, `logs/` logs, `Freequay.app` the app built from `app/`, `scripts/compat/applegamingwiki` the program built from `applegamingwiki.swift` next to it. Only `app/`, `scripts/`, `patches/`, `compat/`, `tests/`, `licenses/` and the documents are versioned.
+`downloads/` source packages, `sources/` unpacked and patched sources, `build/` build trees, `deps/` x86_64 libraries, `dist/` the finished build with its backends, `out/` release disk images, `tools/` meson, `logs/` logs, `Freequay.app` the app built from `app/`, `scripts/compat/applegamingwiki`, `fix` and `cabextract` the programs built from the `.swift` files next to them. Only `app/`, `scripts/`, `patches/`, `compat/`, `tests/`, `licenses/` and the documents are versioned.
 
 ## License
 
 - Scripts, app, tests and documents of this repository: MIT, see `LICENSE`.
 - `patches/0*.patch` change Wine and are under Wine's license, LGPL-2.1-or-later. `patches/dxvk-*.patch` are under DXVK's zlib license, `patches/moltenvk-*.patch` under MoltenVK's Apache-2.0.
 - The generated files in `compat/` keep the license of their source, named in each file's header: `protondb.txt` ODbL 1.0, `protonfixes.txt` BSD-2-Clause, `proton.txt` BSD-3-Clause, `dxvk.txt` zlib. Each row of `notes.tsv` names its source and keeps that source's license.
-- The rules from AppleGamingWiki are not part of Freequay or its archive: `freequay applegamingwiki` makes them on your Mac, where they keep AppleGamingWiki's license, CC BY-NC-SA 3.0.
+- The rules from AppleGamingWiki are not part of Freequay: Freequay looks them up on your Mac, where they keep AppleGamingWiki's license, CC BY-NC-SA 3.0.
 - Builds contain Wine, DXVK, MoltenVK, DXMT and other components under their own licenses. If you pass a build on, those licenses apply, including the LGPL's source requirements. D3DMetal is Apple's and under Apple's license.
-- The release archive has the license texts of all its parts in `licenses/`; `licenses/README.md` lists them and where their source code is.
+- The app has the license texts of all its parts in `Contents/SharedSupport/freequay/licenses/`; `licenses/README.md` lists them and where their source code is.

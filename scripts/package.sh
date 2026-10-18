@@ -1,18 +1,23 @@
 #!/bin/zsh
-# Packs the finished build into a release archive that runs without Xcode, Homebrew or a build of
-# its own: Wine, DXMT, DXVK, MoltenVK, the x86_64 libraries, the launcher, Freequay.app, the rules
-# and the license texts. Left out: D3DMetal (Apple's license, scripts/install-d3dmetal.sh), Wine
-# Mono (the first `freequay new` downloads it from WineHQ), the rules from AppleGamingWiki (its
-# license allows no commercial use; scripts/compat/applegamingwiki makes them on the user's Mac)
-# and what only building needs (headers, import libraries, compiler tools).
-# Usage: package.sh <version>      writes out/freequay-<version>-macos.tar.xz and its .sha256
+# Packs the finished build into Freequay.app on a disk image, which runs without Xcode, Homebrew or a
+# build of its own: open it, drag the app into Applications. The app carries everything in
+# Contents/SharedSupport/freequay, laid out like the repository: Wine, DXMT, DXVK, MoltenVK, the
+# x86_64 libraries, the launcher and its helpers, the rules and the license texts. What Freequay
+# downloads or installs later goes to ~/Library/Application Support/freequay, so the signed app stays
+# as it is. Left out: D3DMetal (Apple's license; the app leads to Apple's download), Wine Mono (the
+# first bottle downloads it from WineHQ), the rules from AppleGamingWiki (its license allows no
+# commercial use; they are looked up on the user's Mac) and what only building needs.
+# Usage: package.sh <version> [identity]   writes out/Freequay-<version>.dmg and its .sha256; the
+#                                          identity goes to scripts/sign.sh, ad hoc without one
 set -euo pipefail
 
 ROOT=${0:A:h:h}
-VERSION=${1:?version missing, for example 0.1.0}
-NAME=freequay-$VERSION
-STAGE=$ROOT/build/package/$NAME
-OUT=$ROOT/out/$NAME-macos.tar.xz
+VERSION=${1:?version missing, for example 0.3.0}
+ID=${2:--}
+PKG=$ROOT/build/package
+APP=$PKG/Freequay.app
+STAGE=$APP/Contents/SharedSupport/freequay
+OUT=$ROOT/out/Freequay-$VERSION.dmg
 SRC=$ROOT/sources
 NETTLE=$ROOT/downloads/nettle/x/nettle-3.10
 
@@ -21,8 +26,11 @@ for f in dist/wine/bin/wine dist/backends/dxmt dist/backends/dxvk deps/lib/libMo
 done
 [[ -d $NETTLE ]] || { print -u2 "missing $NETTLE, run scripts/fetch-sources.sh"; exit 1; }
 
-print "==> staging $STAGE"
-rm -rf "$STAGE"; mkdir -p "$STAGE/dist/backends" "$STAGE/deps/lib" "$STAGE/scripts/compat" "${OUT:h}"
+print "==> staging $APP"
+rm -rf "$PKG"; mkdir -p "$PKG" "${OUT:h}"
+"$ROOT/scripts/build-app.sh" "$VERSION"
+cp -Rc "$ROOT/Freequay.app" "$APP"
+mkdir -p "$STAGE/dist/backends" "$STAGE/deps/lib" "$STAGE/scripts/compat"
 cp -Rc "$ROOT/dist/wine" "$STAGE/dist/wine"
 cp -Rc "$ROOT/dist/backends/dxmt" "$ROOT/dist/backends/dxvk" "$STAGE/dist/backends/"
 rm -rf "$STAGE/dist/wine/include" "$STAGE/dist/wine/share/wine/mono"
@@ -53,9 +61,7 @@ if otool -L "$STAGE"/deps/lib/*.dylib(.) | awk '!/:$/ && $1 ~ /^\// && $1 !~ /^\
 fi
 
 cp "$ROOT"/scripts/{freequay,install-d3dmetal.sh,install-mono.sh,link-backend.sh} "$STAGE/scripts/"
-"$ROOT/scripts/build-app.sh" "$VERSION"
-cp -Rc "$ROOT/Freequay.app" "$STAGE/"
-cp "$ROOT/scripts/compat/fix.py" "$ROOT/scripts/compat/applegamingwiki" "$STAGE/scripts/compat/"
+cp "$ROOT"/scripts/compat/{applegamingwiki,fix,cabextract,lipo} "$STAGE/scripts/compat/"
 cp -R "$ROOT/compat" "$STAGE/compat"
 # nothing from AppleGamingWiki goes into the archive
 rm -f "$STAGE/compat/applegamingwiki.txt"
@@ -91,11 +97,15 @@ lic moltenvk/glslang "$SRC"/moltenvk/External/glslang/LICENSE.txt
 lic moltenvk/cereal "$SRC"/moltenvk/External/cereal/LICENSE
 lic moltenvk/Vulkan-Headers "$SRC"/moltenvk/External/Vulkan-Headers/{LICENSE.md,LICENSES/*}
 
-print "==> packing $OUT"
+print "==> signing"
+"$ROOT/scripts/sign.sh" "$APP" "$ID"
+
+print "==> disk image $OUT"
+mkdir -p "$PKG/dmg"
+mv "$APP" "$PKG/dmg/"
+ln -s /Applications "$PKG/dmg/Applications"
 rm -f "$OUT" "$OUT.sha256"
-COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs --exclude .DS_Store --exclude __pycache__ \
-  --uid 0 --gid 0 --uname root --gname wheel \
-  --options xz:compression-level=9,xz:threads=0 -cJf "$OUT" -C "${STAGE:h}" "$NAME"
+hdiutil create -quiet -volname Freequay -srcfolder "$PKG/dmg" -fs APFS -format ULMO -o "$OUT"
 ( cd "${OUT:h}" && shasum -a 256 "${OUT:t}" > "${OUT:t}.sha256" )
-print "unpacked $(du -sh "$STAGE" | cut -f1), packed $(du -h "$OUT" | cut -f1)"
+print "app $(du -sh "$PKG/dmg/Freequay.app" | cut -f1), disk image $(du -h "$OUT" | cut -f1)"
 cat "$OUT.sha256"
