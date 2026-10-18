@@ -1,7 +1,9 @@
 #!/bin/zsh
 # Downloads the open sources again and generates the rule files in compat/ from them: the
-# ProtonDB export, AppleGamingWiki, umu-protonfixes, Proton's launcher script and DXVK's game
-# profiles. The downloads go to downloads/compat/ (not versioned).
+# ProtonDB export, umu-protonfixes, Proton's launcher script and DXVK's game profiles. The
+# downloads go to downloads/compat/ (not versioned). The rules from AppleGamingWiki are not part
+# of compat/: its license allows no commercial use, so `freequay applegamingwiki` makes them on
+# the user's Mac (scripts/compat/applegamingwiki.swift).
 # Usage: update.sh [--offline]   (--offline: use the downloads that are there)
 set -euo pipefail
 
@@ -45,11 +47,6 @@ def date(n):
 print(max(names, key=date))')
   [[ -f $DL/protondb/$latest ]] || { rm -f "$DL"/protondb/reports_*.tar.gz
     curl -sfL -o "$DL/protondb/$latest" "https://github.com/bdefore/protondb-data/raw/master/reports/$latest"; }
-
-  print "==> AppleGamingWiki"
-  rm -rf "$DL/agw"
-  "${PY[@]}" "$ROOT/scripts/compat/agw_fetch.py" "$DL/agw" | tail -1
-  date +%Y-%m-%d > "$DL/agw/version"
 fi
 
 print "==> generating rules"
@@ -57,7 +54,6 @@ cd "$ROOT"
 rm -f compat/notes.tsv compat/titles.tsv
 # order: titles from ProtonDB (Steam names) come first
 "${PY[@]}" scripts/compat/protondb.py "$(ls "$DL"/protondb/reports_*.tar.gz | tail -1)" "$(basename "$(ls "$DL"/protondb/reports_*.tar.gz | tail -1)" .tar.gz)"
-"${PY[@]}" scripts/compat/applegamingwiki.py "$DL/agw" "$(cat "$DL/agw/version" 2>/dev/null || date +%Y-%m-%d)"
 "${PY[@]}" scripts/compat/protonfixes.py "$DL/protonfixes" "$DL/winetricks-$WINETRICKS_VERSION"
 "${PY[@]}" scripts/compat/proton.py "$DL/proton/proton" "$(cat "$DL/proton/version")"
 "${PY[@]}" scripts/compat/dxvk.py "$DL/dxvk/config.cpp" "$ROOT/sources/dxvk" "$(cat "$DL/dxvk/version")"

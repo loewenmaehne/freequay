@@ -18,6 +18,9 @@
 #                                                   shortcuts in the Start menu and on the desktop
 #                                                   and the programs added here; add one, or take
 #                                                   one off the list with -
+#   freequay applegamingwiki [--if-old]            make the rules from AppleGamingWiki on this Mac;
+#                                                   new and run do it in the background when they
+#                                                   are missing or older than 30 days
 #
 # Options for run (override the bottle defaults):
 #   --backend d3dmetal|d3dmetal3|dxmt|dxvk|wined3d   graphics for all programs without a rule
@@ -31,13 +34,20 @@ set -euo pipefail
 ROOT=${0:A:h:h}
 WINE_DIR=$ROOT/dist/wine
 BACKENDS=$ROOT/dist/backends
-BOTTLES="$HOME/Library/Application Support/freequay/Bottles"
+DATA="$HOME/Library/Application Support/freequay"
+BOTTLES=$DATA/Bottles
 
 # Rules per program: the open counterpart of CrossOver's closed cxcompatdb. ntdll reads them
 # from these files whenever a program starts (patches/0005, format in compat/README.md); for
 # every setting the first file that has it wins. The bottle's own rules come first.
+# AppleGamingWiki's content is under CC BY-NC-SA 3.0, which allows no commercial use, so its
+# rules are not part of Freequay: scripts/compat/applegamingwiki makes them on this Mac, in
+# AGW_DIR, outside the Freequay folder.
 COMPAT=$ROOT/compat
-COMPAT_FILES=(manual.txt applegamingwiki.txt protonfixes.txt proton.txt protondb.txt dxvk.txt)
+AGW_DIR=$DATA/compat
+AGW=$ROOT/scripts/compat/applegamingwiki
+COMPAT_FILES=($COMPAT/manual.txt $AGW_DIR/applegamingwiki.txt $COMPAT/protonfixes.txt $COMPAT/proton.txt
+  $COMPAT/protondb.txt $COMPAT/dxvk.txt)
 WINETRICKS=$ROOT/downloads/compat/winetricks-20260125
 
 die() { print -u2 -- "freequay: $*"; exit 1; }
@@ -73,8 +83,39 @@ backend_dir() { # backend -> DLL directory; wined3d is Wine's own d3d and has no
 
 compat_files() { # bottle-dir -> rule files, separated by colons
   local f out="$1/compat.txt"
-  for f in $COMPAT_FILES; do out+=":$COMPAT/$f"; done
+  for f in $COMPAT_FILES; do out+=":$f"; done
   print -r -- "$out"
+}
+
+# The rules from AppleGamingWiki: download its pages and make the rules from them, about 3 MB in
+# 45 requests, one per second. With --if-old only when they are missing or older than 30 days and
+# nobody tried in the last hour. Without network nothing changes; programs start without them.
+agw_update() { # [--if-old]
+  local tmp ret=0
+  [[ -x $AGW ]] || die "$AGW is missing, build it with scripts/build-app.sh"
+  if [[ ${1:-} == --if-old ]]; then agw_due || return 0; fi
+  mkdir -p "$AGW_DIR"
+  touch "$AGW_DIR/.tried"
+  tmp=$(mktemp -d -t freequay-agw)
+  if ! "$AGW" fetch "$tmp" || ! "$AGW" rules "$tmp" "$AGW_DIR"; then
+    print -u2 "freequay: no new rules from AppleGamingWiki; try again later with: freequay applegamingwiki"
+    ret=1
+  fi
+  rm -rf "$tmp"
+  return $ret
+}
+
+agw_due() {
+  local now=$(date +%s) rules=$AGW_DIR/applegamingwiki.txt tried=$AGW_DIR/.tried
+  [[ ! -f $rules ]] || (( now - $(stat -f %m "$rules") > 30 * 86400 )) || return 1
+  [[ ! -f $tried ]] || (( now - $(stat -f %m "$tried") > 3600 ))
+}
+
+agw_background() { # agw_update --if-old without waiting for it
+  [[ -x $AGW ]] && agw_due || return 0
+  mkdir -p "$AGW_DIR"
+  touch "$AGW_DIR/.tried"
+  nohup /bin/zsh "$ROOT/scripts/freequay" applegamingwiki < /dev/null > "$AGW_DIR/applegamingwiki.log" 2>&1 &!
 }
 
 rule_key() { # program.exe or steam:ID -> key of a rule
@@ -205,6 +246,7 @@ case $cmd in
   new)
     dir=$(bottle_dir "${1:-}")
     [[ -e $dir ]] && die "bottle exists already: $dir"
+    agw_background
     # Wine installs Wine Mono (.NET) silently from dist/wine/share/wine/mono. The release archive
     # leaves it out; the first new bottle downloads it from WineHQ. Gecko (HTML) stays off,
     # otherwise Wine asks for the download in a dialog.
@@ -247,6 +289,7 @@ case $cmd in
         print -u2 "freequay: no python3, skipping the setup of Steam games (xcode-select --install)"
       fi
     fi
+    agw_background
     setup_env "$dir" "$backend" "$avx" "$hud" "$debug"
     # Rosetta reads ROSETTA_ADVERTISE_AVX only at exec; for child processes ntdll sets it itself
     if [[ $cmd == run ]] && grep -qi -- "^exe:[^"$'\t'"]*${1:t}"$'\t'".*env=ROSETTA_ADVERTISE_AVX=1" \
@@ -299,16 +342,18 @@ case $cmd in
     if [[ -n "${2:-}" ]]; then dir=$(bottle_dir "$1"); shift; else dir=; fi
     [[ -n "${1:-}" ]] || die "usage: freequay info [<bottle>] <program.exe|steam:ID|title>"
     files=(); [[ -n $dir && -f $dir/compat.txt ]] && files+=("$dir/compat.txt")
-    for f in $COMPAT_FILES; do [[ -f $COMPAT/$f ]] && files+=("$COMPAT/$f"); done
+    for f in $COMPAT_FILES; do [[ -f $f ]] && files+=("$f"); done
+    notes=($AGW_DIR/notes.tsv(N) $COMPAT/notes.tsv(N)) titles=($COMPAT/titles.tsv(N) $AGW_DIR/titles.tsv(N))
     query=$1
     if [[ $query == <-> || $query == steam:<-> ]]; then
       ids=(${query#steam:})
-    elif [[ $query == *.exe ]]; then
+    elif [[ $query == *.exe ]] || (( ! $#titles )); then
       ids=()
     else
-      # title: Steam app IDs from compat/titles.tsv
-      ids=(${(f)"$({ grep -i -- "$query" "$COMPAT/titles.tsv" 2>/dev/null || true; } | head -20 | cut -f1)"})
-      { grep -i -- "$query" "$COMPAT/titles.tsv" 2>/dev/null || true; } | head -20 | sed 's/^/  /'
+      # title: Steam app IDs from titles.tsv in compat/ and from AppleGamingWiki, one title per ID
+      found=$(awk -F'\t' '!/^#/ && !seen[$1]++' $titles | { grep -i -- "$query" || true; } | head -20)
+      ids=(${(f)"$(print -r -- "$found" | cut -f1)"})
+      [[ -z $found ]] || print -r -- "$found" | sed 's/^/  /'
     fi
     # grep often finds nothing; with pipefail that must not end the command
     for f in $files; do
@@ -319,7 +364,9 @@ case $cmd in
       fi
     done
     for id in $ids; do
-      { grep -- "^steam:$id"$'\t' "$COMPAT/notes.tsv" 2>/dev/null || true; } | cut -f2- | sed "s/^/  note steam:$id: /"
+      for f in $notes; do
+        { grep -- "^steam:$id"$'\t' "$f" || true; } | cut -f2- | sed "s/^/  note steam:$id: /"
+      done
     done
     ;;
   fix)
@@ -333,6 +380,10 @@ case $cmd in
     ;;
   list)
     [[ -d $BOTTLES ]] && ls -1 "$BOTTLES" || true
+    ;;
+  applegamingwiki)
+    [[ -z ${1:-} || $1 == --if-old ]] || die "unknown option: $1"
+    agw_update "${1:-}"
     ;;
   programs)
     # One line per program: its name, a tab and what run takes for it; first what the bottle has

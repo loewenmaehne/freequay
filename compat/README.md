@@ -8,11 +8,13 @@ The open counterpart of CrossOver's closed compatibility database: text files wi
 
 1. `compat.txt` in the bottle: your own rules (`freequay app`, `freequay rule`)
 2. `manual.txt`: tested in Freequay
-3. `applegamingwiki.txt`: reports from Mac players on CrossOver
+3. `applegamingwiki.txt` in `~/Library/Application Support/freequay/compat`: reports from Mac players on CrossOver
 4. `protonfixes.txt`, `proton.txt`, `protondb.txt`: fixes and reports from the Linux world
 5. `dxvk.txt`: DXVK options per game
 
-`scripts/compat/update.sh` generates files 3 to 5; do not edit them by hand, your own rules belong in the bottle or in `manual.txt`. `notes.tsv` (notes, also on what was left out) and `titles.tsv` (Steam app ID and title) are only read by `freequay info`.
+`scripts/compat/update.sh` generates files 4 and 5; do not edit them by hand, your own rules belong in the bottle or in `manual.txt`. `notes.tsv` (notes, also on what was left out) and `titles.tsv` (Steam app ID and title) are only read by `freequay info`.
+
+AppleGamingWiki's content is under CC BY-NC-SA 3.0, which allows no commercial use, so Freequay does not ship rules taken from it. `freequay applegamingwiki` downloads the pages with a macOS compatibility table (about 3 MB, one request per second) and makes file 3 on your Mac, with a `notes.tsv` and `titles.tsv` of its own next to it; the program behind it is `scripts/compat/applegamingwiki`, built from `applegamingwiki.swift` by `scripts/build-app.sh`. `freequay new` and `freequay run` start it in the background when the file is missing or older than 30 days, and so does `Freequay.app` when it opens. Without network nothing changes, and programs start without these rules.
 
 ## Format
 

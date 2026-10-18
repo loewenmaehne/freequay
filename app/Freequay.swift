@@ -93,6 +93,9 @@ final class Model: ObservableObject {
         guard root != nil else { return }
         liftQuarantine()
         reload()
+        // the rules per game from AppleGamingWiki are made on this Mac, when they are missing or
+        // older than 30 days; programs start without them meanwhile
+        launch(["applegamingwiki", "--if-old"]) { _, _ in }
     }
 
     // The folder around the app, if scripts/freequay is in it. macOS runs a downloaded app that
