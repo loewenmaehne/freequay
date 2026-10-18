@@ -1,6 +1,6 @@
 # Licenses and source code
 
-The release archive of Freequay contains the parts below. Each keeps its own license; this folder has the license texts. Freequay's own scripts and documents are under the MIT license (`LICENSE` in the top folder). `scripts/package.sh` builds the archive and copies the texts that are not in this folder of the repository from the sources the build used.
+Freequay.app contains the parts below, in `Contents/SharedSupport/freequay`. Each keeps its own license; this folder has the license texts. Freequay's own scripts and documents are under the MIT license (`LICENSE` in the top folder). `scripts/package.sh` builds the app and copies the texts that are not in this folder of the repository from the sources the build used.
 
 ## Programs and libraries
 
@@ -34,20 +34,21 @@ Freequay changed Wine, MoltenVK and DXVK; the changes are the files in `patches/
 
 Each row of `notes.tsv` names its source and keeps that source's license.
 
-## Not in the archive
+## Not in the app
 
-- D3DMetal: Apple's, under Apple's license. `scripts/install-d3dmetal.sh` copies it from Apple's Game Porting Toolkit download.
-- Wine Mono: the first `freequay new` downloads it unchanged from WineHQ (dl.winehq.org/wine/wine-mono/10.4.1), where its source is as well.
-- winetricks: `freequay fix` downloads it from its GitHub repository.
+- D3DMetal: Apple's, under Apple's license. You download it from Apple yourself; the app, or `scripts/install-d3dmetal.sh`, copies it from that disk image into `~/Library/Application Support/freequay/backends`.
+- Wine Mono: the first `freequay new` downloads it unchanged from WineHQ (dl.winehq.org/wine/wine-mono/10.4.1), where its source is as well, into `~/Library/Application Support/freequay/cache`.
+- winetricks: `freequay fix` downloads it from its GitHub repository, into `~/Library/Application Support/freequay/cache`.
+- cabextract: winetricks calls it, but Freequay brings no copy; `scripts/compat/cabextract`, Freequay's own program, unpacks with the bsdtar (libarchive) that comes with macOS.
 - The rules from AppleGamingWiki: its content is under CC BY-NC-SA 3.0, which allows no commercial use. `scripts/compat/applegamingwiki` looks up the pages of the installed Steam games on applegamingwiki.com and makes the rules on your Mac, in `~/Library/Application Support/freequay/compat`; the header of the file names the license (creativecommons.org/licenses/by-nc-sa/3.0/).
 
 ## Source code
 
-The source of everything under the LGPL in the archive (Wine with its built-in libraries, GnuTLS, GMP, Nettle) and of the other parts Freequay built is in these files, attached unchanged to the same GitHub release:
+The source of everything under the LGPL in the app (Wine with its built-in libraries, GnuTLS, GMP, Nettle) and of the other parts Freequay built is in these files, attached unchanged to the same GitHub release:
 
 | File | SHA-256 | Original location |
 |---|---|---|
 | `crossover-sources-26.3.0.tar.gz` (Wine, GnuTLS, GMP, FreeType, MoltenVK, SPIRV-Cross, DXVK) | `ac99c8ca4b3848f3e81784135f023df266b61c2345726ea55a50b3e030dd6872` | media.codeweavers.com/pub/crossover/source/ |
 | `nettle-3.10.tar.gz` (Nettle; CodeWeavers' package lacks its `Makefile.in`) | `b4c518adb174e484cb4acea54118f02380c7133771e7e9beb98a0787194ee47c` | ftp.gnu.org/gnu/nettle/ |
 
-Freequay's patches and build scripts are the repository at the release's tag (github.com/loewenmaehne/freequay); `scripts/fetch-sources.sh` unpacks and patches the sources, the steps under "Build" in the README build what the archive contains. MoltenVK's `fetchDependencies` gets glslang, cereal and Vulkan-Headers at the revisions in `ExternalRevisions`. DXMT 0.80: github.com/3Shain/dxmt, tag `v0.80`.
+Freequay's patches and build scripts are the repository at the release's tag (github.com/loewenmaehne/freequay); `scripts/fetch-sources.sh` unpacks and patches the sources, the steps under "Build" in the README build what the app contains. MoltenVK's `fetchDependencies` gets glslang, cereal and Vulkan-Headers at the revisions in `ExternalRevisions`. DXMT 0.80: github.com/3Shain/dxmt, tag `v0.80`.
