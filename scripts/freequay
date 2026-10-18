@@ -247,7 +247,7 @@ setup_env() { # bottle-dir backend avx hud debug
   d=$(backend_dir "$backend")
   case $backend in
     # d3dmetal = Apple's D3DMetal 4.0 beta 2, d3dmetal3 = 3.0 (scripts/install-d3dmetal.sh)
-    d3dmetal|d3dmetal3) [[ -d $d ]] || die "$backend is missing, run scripts/install-d3dmetal.sh first" ;;
+    d3dmetal|d3dmetal3) [[ -d $d ]] || die "$backend is missing: add D3DMetal in the app, or run scripts/install-d3dmetal.sh" ;;
     dxmt) [[ -d $d ]] || die "DXMT is missing, run scripts/install-dxmt.sh first" ;;
     # DirectX 9 and 11 over Vulkan and MoltenVK (scripts/build-dxvk.sh)
     dxvk) [[ -d $d ]] || die "DXVK is missing, run scripts/build-dxvk.sh first" ;;
