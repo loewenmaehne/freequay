@@ -18,6 +18,9 @@ base=$DIR; up=
 while [[ $WINE_UNIX != ${base%/}/* ]]; do base=${base:h}; up+=../; done
 rel=$up${WINE_UNIX#${base%/}/}
 
+# links left from where the app was before
+for link in "$DIR"/*(N-@); do rm "$link"; done
+
 for lib in "$DIR"/*.(so|dylib)(N); do
   LC_ALL=C grep -aoE '@rpath/[A-Za-z0-9_.+-]+\.(so|dylib)' "$lib" | sed 's|^@rpath/||' | sort -u |
   while read -r dep; do

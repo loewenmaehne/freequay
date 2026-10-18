@@ -10,3 +10,5 @@ __pycache__/
 out/
 Freequay.app/
 scripts/compat/applegamingwiki
+scripts/compat/fix
+scripts/compat/cabextract

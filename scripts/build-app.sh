@@ -1,9 +1,10 @@
 #!/bin/zsh
 # Builds Freequay.app, the window that starts Windows programs without Terminal, from app/ into the
 # root of the repository: the app looks for scripts/freequay next to itself. app/Icon.swift draws its
-# icon, iconutil packs it. Also builds scripts/compat/applegamingwiki, which makes the rules from
-# AppleGamingWiki on the user's Mac. Needs swiftc from Xcode or the Command Line Tools; the
-# compiler's module cache and the icon's images stay in build/app. Signed ad hoc.
+# icon, iconutil packs it. Also builds the helpers in scripts/compat: applegamingwiki (the rules from
+# AppleGamingWiki), fix (freequay fix) and cabextract (for winetricks, on the bsdtar of macOS). Needs
+# swiftc from Xcode or the Command Line Tools; the compiler's module cache and the icon's images stay
+# in build/app. Signed ad hoc; scripts/sign.sh signs a release.
 # Usage: build-app.sh [version]
 set -euo pipefail
 
@@ -18,6 +19,10 @@ xcrun swiftc -O -parse-as-library -target arm64-apple-macos13.0 -module-cache-pa
   -o "$APP/Contents/MacOS/Freequay" "$ROOT/app/Freequay.swift"
 xcrun swiftc -O -parse-as-library -target arm64-apple-macos13.0 -module-cache-path "$BUILD/ModuleCache" \
   -o "$ROOT/scripts/compat/applegamingwiki" "$ROOT/scripts/compat/applegamingwiki.swift"
+for tool in fix cabextract; do
+  xcrun swiftc -O -target arm64-apple-macos13.0 -module-cache-path "$BUILD/ModuleCache" \
+    -o "$ROOT/scripts/compat/$tool" "$ROOT/scripts/compat/$tool.swift"
+done
 xcrun swiftc -O -module-cache-path "$BUILD/ModuleCache" -o "$BUILD/icon" "$ROOT/app/Icon.swift"
 "$BUILD/icon" "$BUILD/Freequay.iconset"
 iconutil -c icns -o "$APP/Contents/Resources/Freequay.icns" "$BUILD/Freequay.iconset"

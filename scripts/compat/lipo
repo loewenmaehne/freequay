@@ -1,0 +1,11 @@
+#!/bin/zsh
+# Freequay: `lipo -archs` for winetricks, which asks lipo for the architecture of wine and wineserver.
+# On a Mac without the Command Line Tools /usr/bin/lipo only offers to install them; this answers from
+# file(1) instead. scripts/freequay puts it on the PATH of winetricks only.
+[[ ${1:-} == -archs && -n ${2:-} ]] || { print -u2 "lipo: only -archs is supported here"; exit 1; }
+case $(file -b -- "$2") in
+  "Mach-O 64-bit "*x86_64*) print x86_64 ;;
+  "Mach-O 64-bit "*arm64*) print arm64 ;;
+  "Mach-O "*i386*) print i386 ;;
+  *) print -u2 "lipo: not a mach-o '$2'"; exit 1 ;;
+esac

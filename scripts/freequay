@@ -36,6 +36,11 @@ WINE_DIR=$ROOT/dist/wine
 BACKENDS=$ROOT/dist/backends
 DATA="$HOME/Library/Application Support/freequay"
 BOTTLES=$DATA/Bottles
+# What Freequay downloads or installs by itself goes to DATA as well, so that Freequay.app stays as
+# it was signed: D3DMetal from Apple's download (backends), Wine Mono from WineHQ (cache/wine, where
+# Wine looks with XDG_CACHE_HOME), winetricks and the packages it downloads (cache).
+OWN_BACKENDS=$DATA/backends
+CACHE=$DATA/cache
 
 # Rules per program: the open counterpart of CrossOver's closed cxcompatdb. ntdll reads them
 # from these files whenever a program starts (patches/0005, format in compat/README.md); for
@@ -48,7 +53,8 @@ AGW_DIR=$DATA/compat
 AGW=$ROOT/scripts/compat/applegamingwiki
 COMPAT_FILES=($COMPAT/manual.txt $AGW_DIR/applegamingwiki.txt $COMPAT/protonfixes.txt $COMPAT/proton.txt
   $COMPAT/protondb.txt $COMPAT/dxvk.txt)
-WINETRICKS=$ROOT/downloads/compat/winetricks-20260125
+WINETRICKS=$CACHE/winetricks-20260125
+[[ ! -f $ROOT/downloads/compat/${WINETRICKS:t} ]] || WINETRICKS=$ROOT/downloads/compat/${WINETRICKS:t}  # a build tree
 
 die() { print -u2 -- "freequay: $*"; exit 1; }
 
@@ -76,7 +82,8 @@ check_backend() {
 
 backend_dir() { # backend -> DLL directory; wined3d is Wine's own d3d and has none
   case $1 in
-    d3dmetal|d3dmetal3) print -r -- "$BACKENDS/$1/lib/wine" ;;
+    # from Apple's download, installed into DATA; a build tree may keep them in dist/backends
+    d3dmetal|d3dmetal3) [[ -d $OWN_BACKENDS/$1 ]] && print -r -- "$OWN_BACKENDS/$1/lib/wine" || print -r -- "$BACKENDS/$1/lib/wine" ;;
     dxmt|dxvk) print -r -- "$BACKENDS/$1" ;;
   esac
 }
@@ -208,18 +215,12 @@ bottle_running() { # bottle-dir: is a wineserver running for the bottle?
   [[ -S /tmp/.wine-$UID/$id/socket ]]
 }
 
-# python3 for fix.py. Without the Command Line Tools /usr/bin/python3 only offers to install them.
-have_python() {
-  local p
-  p=$(whence -p python3) || return 1
-  [[ $p != /usr/bin/python3 ]] || xcode-select -p > /dev/null 2>&1
-}
-
-# One-time setup from the rules (scripts/compat/fix.py). winetricks waits until every program
-# of the bottle has ended, so this only runs when nothing runs there.
+# One-time setup from the rules (scripts/compat/fix, built from fix.swift). winetricks waits until
+# every program of the bottle has ended, so this only runs when nothing runs there. Its cabextract
+# is scripts/compat/cabextract, which unpacks with the bsdtar of macOS.
 run_fix() { # bottle-dir [--list] [key ...]
   local dir=$1; shift
-  have_python || die "freequay fix needs python3; install the Command Line Tools with: xcode-select --install"
+  [[ -x $ROOT/scripts/compat/fix ]] || die "scripts/compat/fix is missing, build it with scripts/build-app.sh"
   setup_env "$dir" "$(conf_get "$dir" backend dxmt)" 0 0 0
   if [[ ! -f $WINETRICKS ]]; then
     mkdir -p "${WINETRICKS:h}"
@@ -229,14 +230,16 @@ run_fix() { # bottle-dir [--list] [key ...]
   if [[ ${1:-} != --list ]] && bottle_running "$dir"; then
     die "programs are still running in the bottle; stop them first (freequay kill ${dir:t})"
   fi
-  python3 -I "$ROOT/scripts/compat/fix.py" "$dir" "$WINE_DIR/bin/wine" "$WINETRICKS" "$FREEQUAY_COMPAT_FILES" "$@"
+  PATH="$ROOT/scripts/compat:$PATH" "$ROOT/scripts/compat/fix" "$dir" "$WINE_DIR/bin/wine" "$WINETRICKS" \
+    "$FREEQUAY_COMPAT_FILES" "$@"
 }
 
 setup_env() { # bottle-dir backend avx hud debug
   local dir=$1 backend=$2 b d
   export WINEPREFIX="$dir"
   export DYLD_FALLBACK_LIBRARY_PATH="$ROOT/deps/lib:/usr/lib"
-  export FREEQUAY_LIBRARY_PATH=$DYLD_FALLBACK_LIBRARY_PATH  # survives system binaries (fix.py)
+  export FREEQUAY_LIBRARY_PATH=$DYLD_FALLBACK_LIBRARY_PATH  # survives system binaries (fix)
+  export XDG_CACHE_HOME=$CACHE  # Wine Mono
   export WINEMSYNC=1
   export MVK_CONFIG_LOG_LEVEL=${MVK_CONFIG_LOG_LEVEL:-1}
   [[ $5 == 1 ]] || export WINEDEBUG=${WINEDEBUG:--all}
@@ -261,6 +264,8 @@ setup_env() { # bottle-dir backend avx hud debug
   for b in d3dmetal d3dmetal3 dxmt dxvk; do
     d=$(backend_dir $b)
     [[ -d $d ]] || continue
+    # D3DMetal's links to Wine's Unix libraries end nowhere after the app moved; make them again
+    [[ -z $(print -l -- $d/x86_64-unix/*(N-@)) ]] || "$ROOT/scripts/link-backend.sh" "$d/x86_64-unix" > /dev/null
     export "FREEQUAY_BACKEND_$b=$d"
     backend_stubs "$dir" "$d"
   done
@@ -289,15 +294,15 @@ case $cmd in
   new)
     dir=$(bottle_dir "${1:-}")
     [[ -e $dir ]] && die "bottle exists already: $dir"
-    # Wine installs Wine Mono (.NET) silently from dist/wine/share/wine/mono. The release archive
-    # leaves it out; the first new bottle downloads it from WineHQ. Gecko (HTML) stays off,
-    # otherwise Wine asks for the download in a dialog.
-    msi=($WINE_DIR/share/wine/mono/wine-mono-*-x86.msi(N))
+    # Wine installs Wine Mono (.NET) silently from dist/wine/share/wine/mono or from CACHE/wine,
+    # where the first new bottle downloads it from WineHQ. Gecko (HTML) stays off, otherwise Wine
+    # asks for the download in a dialog.
+    msi=($WINE_DIR/share/wine/mono/wine-mono-*-x86.msi(N) $CACHE/wine/wine-mono-*-x86.msi(N))
     (( $#msi )) || "$ROOT/scripts/install-mono.sh" ||
       print -u2 "freequay: Wine Mono is missing, .NET programs will not run in this bottle"
     mkdir -p "$dir"
     setup_env "$dir" wined3d 0 0 0
-    msi=($WINE_DIR/share/wine/mono/wine-mono-*-x86.msi(N))
+    msi=($WINE_DIR/share/wine/mono/wine-mono-*-x86.msi(N) $CACHE/wine/wine-mono-*-x86.msi(N))
     overrides="mshtml="; (( $#msi )) || overrides="mscoree,mshtml="
     WINEDLLOVERRIDES=$overrides "$WINE_DIR/bin/wine" wineboot --init
     "$WINE_DIR/bin/wineserver" --wait
@@ -331,11 +336,7 @@ case $cmd in
     fi
     # before Steam starts, catch up on the setup of installed games (freequay fix)
     if [[ $cmd == run && ${1:t:l} == steam.exe ]] && ! bottle_running "$dir"; then
-      if have_python; then
-        run_fix "$dir" || print -u2 "freequay: setup incomplete, starting Steam anyway"
-      else
-        print -u2 "freequay: no python3, skipping the setup of Steam games (xcode-select --install)"
-      fi
+      run_fix "$dir" || print -u2 "freequay: setup incomplete, starting Steam anyway"
     fi
     # while Steam runs, the games it installs get their rules
     [[ $cmd == run && ${1:t:l} == steam.exe ]] && agw_watch "$dir"
