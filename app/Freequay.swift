@@ -17,6 +17,14 @@ struct FreequayApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About Freequay") {
+                    NSApp.orderFrontStandardAboutPanel(options: [.credits: NSAttributedString(string:
+                        "Settings per game come from AppleGamingWiki (CC BY-NC-SA 3.0), umu-protonfixes, Proton, ProtonDB and DXVK. "
+                        + "Freequay is not affiliated with CodeWeavers or Apple.",
+                        attributes: [.font: NSFont.systemFont(ofSize: 11)])])
+                }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Open Program…") { delegate.model.choose() }.keyboardShortcut("o")
             }
@@ -61,6 +69,8 @@ final class Model: ObservableObject {
     @Published var status = ""
     @Published var busy = false    // a bottle or Steam is being set up
     @Published var naming = false  // the sheet for a new bottle is open
+    // the note on what Freequay downloads from where; until it was read, the launcher downloads nothing by itself
+    @Published var servers = !UserDefaults.standard.bool(forKey: "servers")
     @Published var starting: String?  // the program being started, until a window of it shows
     private var waiting: [URL] = []  // programs dropped before there was a bottle
 
@@ -93,9 +103,12 @@ final class Model: ObservableObject {
         guard root != nil else { return }
         liftQuarantine()
         reload()
-        // the rules per game from AppleGamingWiki are made on this Mac, when they are missing or
-        // older than 30 days; programs start without them meanwhile
-        launch(["applegamingwiki", "--if-old"]) { _, _ in }
+    }
+
+    func serversRead() {
+        UserDefaults.standard.set(true, forKey: "servers")
+        servers = false
+        reload()  // now the launcher may look up the Steam games in AppleGamingWiki
     }
 
     // The folder around the app, if scripts/freequay is in it. macOS runs a downloaded app that
@@ -371,6 +384,7 @@ final class Model: ObservableObject {
         process.arguments = [root.appendingPathComponent("scripts/freequay").path] + arguments
         process.currentDirectoryURL = root
         process.standardInput = FileHandle.nullDevice
+        if servers { process.environment = ProcessInfo.processInfo.environment.merging(["FREEQUAY_OFFLINE": "1"]) { $1 } }
         return process
     }
 
@@ -436,6 +450,7 @@ struct ContentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Freequay").font(.system(size: 34, weight: .heavy)).foregroundStyle(ink)
+                .sheet(isPresented: $model.servers) { Servers(model: model).interactiveDismissDisabled() }
             Text("Windows programs on your Mac").font(.system(size: 14)).foregroundStyle(muted).padding(.top, 1)
             if model.root == nil {
                 quay {
@@ -596,6 +611,46 @@ struct ContentView: View {
             }
         }
         .frame(height: 24)
+    }
+}
+
+// what Freequay downloads, from where and why; shown once, before anything is downloaded
+struct Servers: View {
+    @ObservedObject var model: Model
+
+    private let rows = [
+        ("AppleGamingWiki", "settings for your Steam games, CC\u{00A0}BY\u{2011}NC\u{2011}SA\u{00A0}3.0"),  // kept on one line
+        ("WineHQ", "Wine Mono, when you create a bottle"),
+        ("Valve", "Steam, when you install it"),
+        ("GitHub, Microsoft", "winetricks and the runtime packages games ask for"),
+        ("Apple", "D3DMetal, only if you add it yourself"),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("What Freequay downloads").font(.system(size: 19, weight: .bold)).foregroundStyle(ink)
+            Text("Freequay fetches from these servers when it needs something:")
+                .font(.system(size: 13)).foregroundStyle(muted).fixedSize(horizontal: false, vertical: true).padding(.top, 6)
+            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 7) {
+                ForEach(rows, id: \.0) { server, what in
+                    GridRow(alignment: .firstTextBaseline) {
+                        Text(server).font(.system(size: 13, weight: .semibold)).foregroundStyle(ink)
+                        Text(what).font(.system(size: 13)).foregroundStyle(muted).fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            .padding(.top, 14)
+            Text("Freequay itself collects no data.").font(.system(size: 13, weight: .semibold)).foregroundStyle(ink).padding(.top, 14)
+            HStack {
+                Spacer()
+                Button("Continue") { model.serversRead() }.buttonStyle(Solid()).keyboardShortcut(.defaultAction)
+            }
+            .padding(.top, 20)
+        }
+        .padding(24)
+        .frame(width: 440)
+        .background(Color.white)
     }
 }
 
