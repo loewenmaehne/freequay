@@ -18,12 +18,10 @@
  
  PEB *peb = NULL;
  WOW_PEB *wow_peb = NULL;
-@@ -1874,10 +1875,300 @@
-         wow_peb->ImageSubSystemMajorVersion      = peb->ImageSubSystemMajorVersion;
-         wow_peb->ImageSubSystemMinorVersion      = peb->ImageSubSystemMinorVersion;
+@@ -1876,8 +1877,396 @@
          wow_peb->SessionId                       = peb->SessionId;
-+    }
-+}
+     }
+ }
 +
 +
 +/* freequay: compatibility rules per program (freequay.c). They are applied while the process
@@ -38,7 +36,7 @@
 +{
 +    SIZE_T name_len = strlen( name ) + 1, value_len = value ? strlen( value ) + 1 : 0;
 +    WCHAR *nameW = malloc( name_len * sizeof(WCHAR) ), *valueW = value ? malloc( value_len * sizeof(WCHAR) ) : NULL;
-+
+ 
 +    if (env && nameW && (valueW || !value))
 +    {
 +        ntdll_umbstowcs( name, name_len, nameW, name_len );
@@ -50,7 +48,7 @@
 +    if (value) setenv( name, value, 1 );
 +    else unsetenv( name );
 +}
-+
+ 
 +static char *freequay_get_env( WCHAR *env, SIZE_T pos, const WCHAR *name )
 +{
 +    WCHAR *value = get_env_var( env, pos, name, wcslen( name ) );
@@ -71,11 +69,6 @@
 +    size_t len = old ? strlen( old ) + 2 : 1;
 +    unsigned int i;
 +
-+    if (r->backend)
-+    {
-+        freequay_set_backend( r->backend );
-+        freequay_set_env( env, pos, size, "CX_ACTIVE_GRAPHICS_BACKEND", getenv( "CX_ACTIVE_GRAPHICS_BACKEND" ) );
-+    }
 +    for (i = 0; i < r->env_count; i++)
 +    {
 +        if (!(eq = strchr( r->env[i], '=' ))) continue;
@@ -128,32 +121,130 @@
 +    return ret;
 +}
 +
-+static USHORT freequay_pe_machine( const WCHAR *nt_path )
++#define FREEQUAY_D3D11 1
++#define FREEQUAY_D3D12 2
++
++/* file offset of the data at an RVA, -1 if the file has none there */
++static off_t freequay_rva_offset( const IMAGE_SECTION_HEADER *sec, unsigned int count, DWORD rva )
 +{
++    unsigned int i;
++
++    for (i = 0; i < count; i++)
++        if (rva >= sec[i].VirtualAddress && rva - sec[i].VirtualAddress < sec[i].SizeOfRawData)
++            return (off_t)sec[i].PointerToRawData + rva - sec[i].VirtualAddress;
++    return -1;
++}
++
++/* machine of a PE file, 0 if it is none; with d3d, also which of d3d11.dll and d3d12.dll it
++ * imports, directly or delay-loaded (FREEQUAY_D3D11, FREEQUAY_D3D12) */
++static USHORT freequay_pe_info( const WCHAR *nt_path, unsigned int *d3d )
++{
++    static const struct { unsigned int dir, size, name; } tables[] =
++    {
++        { IMAGE_DIRECTORY_ENTRY_IMPORT, sizeof(IMAGE_IMPORT_DESCRIPTOR), offsetof(IMAGE_IMPORT_DESCRIPTOR, Name) },
++        { IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT, sizeof(IMAGE_DELAYLOAD_DESCRIPTOR), offsetof(IMAGE_DELAYLOAD_DESCRIPTOR, DllNameRVA) },
++    };
 +    UNICODE_STRING nt_name, true_nt_name;
 +    OBJECT_ATTRIBUTES attr;
 +    IMAGE_DOS_HEADER dos;
-+    IMAGE_FILE_HEADER file;
-+    char *unix_name;
-+    DWORD signature;
++    union { IMAGE_NT_HEADERS32 h32; IMAGE_NT_HEADERS64 h64; } nt;
++    IMAGE_SECTION_HEADER sec[96];
++    const IMAGE_DATA_DIRECTORY *dirs;
++    unsigned int i, j, k, count, nsec;
++    char *unix_name, name[16];
 +    USHORT ret = 0;
++    ssize_t len;
++    DWORD rva;
++    off_t off;
 +    int fd;
 +
++    if (d3d) *d3d = 0;
 +    init_unicode_string( &nt_name, nt_path );
 +    InitializeObjectAttributes( &attr, &nt_name, OBJ_CASE_INSENSITIVE, 0, NULL );
 +    if (get_nt_and_unix_names( &attr, &true_nt_name, &unix_name, FILE_OPEN, FALSE )) return 0;
-+    if ((fd = open( unix_name, O_RDONLY )) != -1)
-+    {
-+        if (pread( fd, &dos, sizeof(dos), 0 ) == sizeof(dos) && dos.e_magic == IMAGE_DOS_SIGNATURE &&
-+            pread( fd, &signature, sizeof(signature), dos.e_lfanew ) == sizeof(signature) &&
-+            signature == IMAGE_NT_SIGNATURE &&
-+            pread( fd, &file, sizeof(file), dos.e_lfanew + sizeof(signature) ) == sizeof(file))
-+            ret = file.Machine;
-+        close( fd );
-+    }
++    fd = open( unix_name, O_RDONLY );
 +    free( unix_name );
 +    free( true_nt_name.Buffer );
++    if (fd == -1) return 0;
++
++    if (pread( fd, &dos, sizeof(dos), 0 ) != sizeof(dos) || dos.e_magic != IMAGE_DOS_SIGNATURE ||
++        (len = pread( fd, &nt, sizeof(nt), dos.e_lfanew )) < (ssize_t)offsetof(IMAGE_NT_HEADERS32, OptionalHeader) ||
++        nt.h32.Signature != IMAGE_NT_SIGNATURE)
++        goto done;
++    ret = nt.h32.FileHeader.Machine;
++    if (!d3d) goto done;
++
++    if (nt.h32.OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC && len >= (ssize_t)sizeof(nt.h32))
++    {
++        count = nt.h32.OptionalHeader.NumberOfRvaAndSizes;
++        dirs = nt.h32.OptionalHeader.DataDirectory;
++    }
++    else if (nt.h64.OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC && len >= (ssize_t)sizeof(nt.h64))
++    {
++        count = nt.h64.OptionalHeader.NumberOfRvaAndSizes;
++        dirs = nt.h64.OptionalHeader.DataDirectory;
++    }
++    else goto done;
++    nsec = min( nt.h32.FileHeader.NumberOfSections, ARRAY_SIZE(sec) );
++    len = pread( fd, sec, nsec * sizeof(sec[0]), dos.e_lfanew + offsetof(IMAGE_NT_HEADERS32, OptionalHeader) +
++                 nt.h32.FileHeader.SizeOfOptionalHeader );
++    nsec = len > 0 ? len / sizeof(sec[0]) : 0;
++
++    /* the descriptors end with one without a name */
++    for (i = 0; i < ARRAY_SIZE(tables); i++)
++    {
++        if (tables[i].dir >= count || !dirs[tables[i].dir].VirtualAddress) continue;
++        for (j = 0; j < 1024; j++)
++        {
++            off = freequay_rva_offset( sec, nsec, dirs[tables[i].dir].VirtualAddress + j * tables[i].size + tables[i].name );
++            if (off == -1 || pread( fd, &rva, sizeof(rva), off ) != sizeof(rva) || !rva) break;
++            if ((off = freequay_rva_offset( sec, nsec, rva )) == -1 ||
++                (len = pread( fd, name, sizeof(name) - 1, off )) <= 0) continue;
++            name[len] = 0;
++            for (k = 0; name[k]; k++) if (name[k] >= 'A' && name[k] <= 'Z') name[k] += 'a' - 'A';
++            if (!strcmp( name, "d3d11.dll" )) *d3d |= FREEQUAY_D3D11;
++            else if (!strcmp( name, "d3d12.dll" )) *d3d |= FREEQUAY_D3D12;
++        }
++    }
++done:
++    close( fd );
 +    return ret;
++}
++
++/* Backend for a program without a backend rule that imports d3d12.dll, or NULL. dxmt and dxvk
++ * have no Direct3D 12, and Wine's d3d12 does not work with their dxgi. A 64-bit program gets
++ * D3DMetal when it is installed, otherwise wined3d, where Wine's d3d12 runs on vkd3d. Without
++ * D3DMetal, a program that imports d3d11.dll as well keeps dxmt or dxvk: Unreal Engine games
++ * import both and most of them run on Direct3D 11. */
++static const char *freequay_d3d12_backend( const WCHAR *nt_path )
++{
++    const char *def = getenv( "FREEQUAY_DEFAULT_BACKEND" ), *dir;
++    unsigned int d3d;
++    USHORT machine;
++
++    if (!def || (strcmp( def, "dxmt" ) && strcmp( def, "dxvk" ))) return NULL;
++    machine = freequay_pe_info( nt_path, &d3d );
++    if (!(d3d & FREEQUAY_D3D12)) return NULL;
++    if (machine == IMAGE_FILE_MACHINE_AMD64)
++    {
++        if ((dir = getenv( "FREEQUAY_BACKEND_d3dmetal" )) && *dir) return "d3dmetal";
++        if ((dir = getenv( "FREEQUAY_BACKEND_d3dmetal3" )) && *dir) return "d3dmetal3";
++    }
++    return (d3d & FREEQUAY_D3D11) ? NULL : "wined3d";
++}
++
++/* graphics backend of the program at nt_path: the one from its rule, else freequay_d3d12_backend */
++static void freequay_apply_backend( const WCHAR *nt_path, WCHAR **env, SIZE_T *pos, SIZE_T *size )
++{
++    const char *name = freequay_rules.backend;
++
++    if (!name || !freequay_set_backend( name ))
++    {
++        if (!nt_path || !(name = freequay_d3d12_backend( nt_path ))) return;
++        TRACE_(freequay)( "%s imports d3d12.dll: backend %s\n", debugstr_w(nt_path), name );
++        freequay_set_backend( name );
++    }
++    freequay_set_env( env, pos, size, "CX_ACTIVE_GRAPHICS_BACKEND", getenv( "CX_ACTIVE_GRAPHICS_BACKEND" ) );
 +}
 +
 +static WCHAR *freequay_to_wide( const char *str )
@@ -187,11 +278,11 @@
 +    {
 +        for (p = q - 1; p > path + 6 && *p != '\\'; p--) ;
 +        memmove( p, q + 3, strlen( q + 3 ) + 1 );
-     }
++    }
 +    ret = freequay_to_wide( path );
 +    orig = freequay_to_wide( image );
-+    machine = ret && orig ? freequay_pe_machine( orig ) : 0;
-+    if (!machine || freequay_pe_machine( ret ) != machine)
++    machine = ret && orig ? freequay_pe_info( orig, NULL ) : 0;
++    if (!machine || freequay_pe_info( ret, NULL ) != machine)
 +    {
 +        WARN_(freequay)( "not starting %s instead of %s\n", debugstr_a(path), debugstr_a(image) );
 +        free( ret );
@@ -200,8 +291,8 @@
 +    free( orig );
 +    free( path );
 +    return ret;
- }
- 
++}
++
 +/* args=, argdel= and exe=; returns the new command line or NULL, *image_ret the new program */
 +static WCHAR *freequay_edit_cmdline( const WCHAR *cmdline, SIZE_T len, const char *image, const char *steam_id,
 +                                     WCHAR **env, SIZE_T *pos, SIZE_T *size, WCHAR **image_ret )
@@ -212,7 +303,7 @@
 +    unsigned int i;
 +    size_t n;
 +    WCHAR *ret;
- 
++
 +    if (image_ret) *image_ret = NULL;
 +    if (!r->args && !r->argdel_count && !r->exe) return NULL;
 +    steam_game = steam_id && freequay_is_steam_game( image, env ? *env : NULL, pos ? *pos : 0 );
@@ -271,6 +362,7 @@
 +    const WCHAR *image = (const WCHAR *)((const char *)(info + 1) + info->curdir_len + info->dllpath_len);
 +    SIZE_T len = info->imagepath_len / sizeof(WCHAR);
 +    char *image_a, *steam_id;
++    WCHAR *nt_path;
 +
 +    *image_ret = *cmdline_ret = NULL;
 +    if (!getenv( "FREEQUAY_COMPAT_FILES" ) || !(image_a = malloc( len * 3 + 1 ))) return;
@@ -282,6 +374,10 @@
 +        *cmdline_ret = freequay_edit_cmdline( image + len, info->cmdline_len / sizeof(WCHAR), image_a, steam_id,
 +                                              env, pos, size, image_ret );
 +    }
++    /* the program that starts: the one from exe= or the image path, both NT paths */
++    nt_path = *image_ret ? NULL : freequay_to_wide( image_a );
++    freequay_apply_backend( *image_ret ? *image_ret : nt_path, env, pos, size );
++    free( nt_path );
 +    free( image_a );
 +    free( steam_id );
 +}
@@ -319,7 +415,7 @@
  /*************************************************************************
   *		build_initial_params
   *
-@@ -1894,11 +2185,16 @@
+@@ -1894,11 +2283,21 @@
      WCHAR *curdir = get_initial_directory();
      UNICODE_STRING nt_name;
      NTSTATUS status;
@@ -331,12 +427,17 @@
  
      /* store the initial PATH value */
      path = get_env_var( env, env_pos, pathW, 4 );
-+    if (freequay_exe && getenv( "FREEQUAY_COMPAT_FILES" ) && freequay_init_rules( freequay_exe, freequay_steam ))
-+        freequay_apply_env( &env, &env_pos, &env_size );
++    if (freequay_exe && getenv( "FREEQUAY_COMPAT_FILES" ))
++    {
++        if (freequay_init_rules( freequay_exe, freequay_steam )) freequay_apply_env( &env, &env_pos, &env_size );
++        if (get_full_path( freequay_exe, curdir, &nt_name )) nt_name.Buffer = NULL;
++        freequay_apply_backend( nt_name.Buffer, &env, &env_pos, &env_size );
++        free( nt_name.Buffer );
++    }
      add_dynamic_environment( &env, &env_pos, &env_size );
      add_registry_environment( &env, &env_pos, &env_size );
      bootstrap = get_env_var( env, env_pos, bootstrapW, ARRAY_SIZE(bootstrapW) );
-@@ -1955,6 +2251,17 @@
+@@ -1955,6 +2354,17 @@
  
      main_wargv = build_wargv( get_dos_path( nt_name.Buffer ));
      cmdline = build_command_line( main_wargv );
@@ -354,7 +455,7 @@
  
      TRACE( "image %s cmdline %s dir %s\n",
             debugstr_w(main_wargv[0]), debugstr_w(cmdline), debugstr_w(curdir) );
-@@ -2012,6 +2319,7 @@
+@@ -2012,6 +2422,7 @@
      struct startup_info_data *info;
      UNICODE_STRING nt_name;
      USHORT machine;
@@ -362,7 +463,7 @@
  
      if (!startup_info_size)
      {
-@@ -2036,12 +2344,15 @@
+@@ -2036,12 +2447,15 @@
      env = malloc( env_size * sizeof(WCHAR) );
      memcpy( env, (char *)info + info_size, env_size * sizeof(WCHAR) );
      env_pos = env_size - 1;
@@ -378,7 +479,7 @@
              + info->dllpath_len + sizeof(WCHAR)
              + info->imagepath_len + sizeof(WCHAR)
              + info->cmdline_len + sizeof(WCHAR)
-@@ -2084,8 +2395,21 @@
+@@ -2084,8 +2498,21 @@
      dst = params->CurrentDirectory.DosPath.Buffer + MAX_PATH;
  
      if (info->dllpath_len) copy_unicode_string( &src, &dst, &params->DllPath, info->dllpath_len );
@@ -412,12 +513,12 @@
 +/* freequay: winemac.drv reads CX_ACTIVE_GRAPHICS_BACKEND. Set it for every program, because
 + * children inherit the Unix environment of the program that started them. */
 +static void set_active_backend( const char *name )
-+{
+ {
 +    if (name && *name) setenv( "CX_ACTIVE_GRAPHICS_BACKEND", strncmp( name, "d3dmetal", 8 ) ? name : "d3dmetal", 1 );
 +}
 +
 +static void set_dll_path( const char *prio_path )
- {
++{
      char *p, *path = getenv( "WINEDLLPATH" );
 -    /* freequay: paths in FREEQUAY_PRIORITY_DLLPATH are searched before the Wine dll dir,
 -     * so a graphics backend (D3DMetal, DXMT) can replace the builtin d3d11/dxgi.
@@ -431,15 +532,16 @@
      int i, count = 0;
  
      if (path) for (p = path, count = 1; *p; p++) if (*p == ':') count++;
-@@ -417,6 +425,27 @@
+@@ -417,6 +425,29 @@
  
      for (i = 0; i < count; i++) dll_path_maxlen = max( dll_path_maxlen, strlen(dll_paths[i]) );
      dll_paths[count] = NULL;
 +}
 +
-+/* freequay: switch this program to the graphics backend a rule asks for (freequay.c). Every
-+ * backend except wined3d needs its DLL directory in FREEQUAY_BACKEND_<name>. */
-+void freequay_set_backend( const char *name )
++/* freequay: switch this program to the graphics backend a rule asks for (freequay.c), or the one
++ * a Direct3D 12 program gets (env.c). Every backend except wined3d needs its DLL directory in
++ * FREEQUAY_BACKEND_<name>; FALSE if it is not installed. */
++BOOL freequay_set_backend( const char *name )
 +{
 +    char var[96];
 +    const char *dir;
@@ -450,16 +552,17 @@
 +    if (!(dir && *dir) && strcmp( name, "wined3d" ))
 +    {
 +        WARN( "backend %s is not installed\n", debugstr_a(name) );
-+        return;
++        return FALSE;
 +    }
 +    for (i = 0; dll_paths[i]; i++) if (dll_paths[i] != dll_dir) free( (char *)dll_paths[i] );
 +    free( dll_paths );
 +    set_dll_path( dir );
 +    set_active_backend( name );
++    return TRUE;
  }
  
  
-@@ -504,7 +533,8 @@
+@@ -504,7 +535,8 @@
          wineloader = build_path( ntdll_dir, "wine" );
      }
  
@@ -507,7 +610,7 @@
 +extern struct freequay_rules freequay_rules;
 +extern BOOL freequay_init_rules( const char *image, const char *steam_id );
 +extern BOOL freequay_tail_match( const char *path, size_t path_len, const char *key, size_t key_len );
-+extern void freequay_set_backend( const char *name );
++extern BOOL freequay_set_backend( const char *name );
 +extern void freequay_spawn_env( const RTL_USER_PROCESS_PARAMETERS *params );
  extern ULONG_PTR redirect_arm64ec_rva( void *module, ULONG_PTR rva, const IMAGE_ARM64EC_METADATA *metadata );
  extern void start_server( BOOL debug );

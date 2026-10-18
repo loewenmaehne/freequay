@@ -21,7 +21,8 @@
 #
 # Options for run (override the bottle defaults):
 #   --backend d3dmetal|d3dmetal3|dxmt|dxvk|wined3d   graphics for all programs without a rule
-#                                                   (default: dxmt)
+#                                                   (default: dxmt); Direct3D 12 programs get
+#                                                   d3dmetal or wined3d instead of dxmt and dxvk
 #   --avx                             Rosetta reports AVX/AVX2 to the game
 #   --hud                             show the Metal performance HUD
 #   --debug                           keep Wine's debug output
