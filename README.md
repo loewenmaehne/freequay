@@ -8,7 +8,7 @@ Freequay runs Windows games and programs on Apple Silicon Macs, for free: Wine b
 
 You need an Apple Silicon Mac with macOS 14 or newer, Rosetta 2 and about 1.5 GB of free disk space; Steam takes another 1.5 GB, plus your games. Neither Xcode, its Command Line Tools nor Homebrew are needed. Most Macs got Rosetta 2 with the first Intel app they opened; otherwise run `softwareupdate --install-rosetta` once in Terminal.
 
-1. Download `Freequay-0.3.0.dmg` from the [latest release](https://github.com/loewenmaehne/freequay/releases/latest) and open it.
+1. Download `Freequay-0.3.1.dmg` from the [latest release](https://github.com/loewenmaehne/freequay/releases/latest) and open it.
 2. Drag Freequay into Applications and open it there. The first time, macOS refuses it because the app is not notarized by Apple: open System Settings, Privacy & Security, click Open Anyway next to the note about Freequay and confirm. After that it opens normally.
 3. The app lists once which servers Freequay downloads from. Then click Create a bottle, a Windows drive of its own (about a minute, with the download of Wine Mono), and install Steam with its button, or drop the installer of a Windows program on the window.
 
@@ -52,8 +52,8 @@ Everything else, such as the graphics per program, is done in Terminal with `fre
 
 ```bash
 cd ~
-curl -LO https://github.com/loewenmaehne/freequay/releases/download/v0.3.0/Freequay-0.3.0.dmg
-hdiutil attach -nobrowse -mountpoint /tmp/freequay Freequay-0.3.0.dmg
+curl -LO https://github.com/loewenmaehne/freequay/releases/download/v0.3.1/Freequay-0.3.1.dmg
+hdiutil attach -nobrowse -mountpoint /tmp/freequay Freequay-0.3.1.dmg
 cp -R /tmp/freequay/Freequay.app /Applications/
 hdiutil detach /tmp/freequay
 alias freequay=/Applications/Freequay.app/Contents/SharedSupport/freequay/scripts/freequay
@@ -149,7 +149,7 @@ scripts/compat/update.sh      # rules from the open sources, optional: compat/ h
 
 D3DMetal: the app leads to Apple's download and installs it. Without the app, download "Evaluation environment for Windows games" from developer.apple.com, mount it and run `scripts/install-d3dmetal.sh "/Volumes/<volume>"`. It installs D3DMetal 4 as `d3dmetal` and version 3 as `d3dmetal3` into `~/Library/Application Support/freequay/backends`, where it stays when Freequay is updated.
 
-`scripts/build-app.sh` builds `Freequay.app` into the root of the repository with swiftc from Xcode or the Command Line Tools, and the helpers in `scripts/compat`: `applegamingwiki`, `fix` and `cabextract`. `scripts/package.sh 0.3.0` builds them as well, puts the build with the launcher, the rules and the license texts into `Freequay.app/Contents/SharedSupport/freequay`, signs the app with `scripts/sign.sh` and packs it into `out/Freequay-0.3.0.dmg`, the release disk image. `sign.sh` signs every Mach-O file with the hardened runtime and the entitlements Wine needs (`app/Freequay.entitlements`); without an identity the signature is ad hoc, with a Developer ID (Apple's developer program) the same call signs for notarization, which then only needs `xcrun notarytool` and `xcrun stapler`.
+`scripts/build-app.sh` builds `Freequay.app` into the root of the repository with swiftc from Xcode or the Command Line Tools, and the helpers in `scripts/compat`: `applegamingwiki`, `fix` and `cabextract`. `scripts/package.sh 0.3.1` builds them as well, puts the build with the launcher, the rules and the license texts into `Freequay.app/Contents/SharedSupport/freequay`, signs the app with `scripts/sign.sh` and packs it into `out/Freequay-0.3.1.dmg`, the release disk image. `sign.sh` signs every Mach-O file with the hardened runtime and the entitlements Wine needs (`app/Freequay.entitlements`); without an identity the signature is ad hoc, with a Developer ID (Apple's developer program) the same call signs for notarization, which then only needs `xcrun notarytool` and `xcrun stapler`.
 
 ## Patches
 
@@ -183,7 +183,7 @@ The one-time setup (winetricks verbs, registry values, Windows version) is done 
 
 ## Tests
 
-Graphics tests from 2026-10-13 on a MacBook Air M1 with macOS 27.0.1; the programs in `tests/` ran again with every backend on 2026-10-18 for 0.2.1, 0.2.2 and 0.3.0:
+Graphics tests from 2026-10-13 on a MacBook Air M1 with macOS 27.0.1; the programs in `tests/` ran again with every backend on 2026-10-18 for 0.2.1, 0.2.2 and 0.3.0, and for 0.3.1 without `--backend` and with `dxvk`:
 
 | Test | Result |
 |---|---|
@@ -209,6 +209,8 @@ The release archives were tested like a new user would: downloaded with the quar
 0.2.2 looks up the rules from AppleGamingWiki on the Mac, game by game. Its archive was tested the same way, with the build folders out of the test's reach. The bottle took 31 seconds and all 12 programs passed with every backend: 48 runs without D3DMetal, 72 with it. Started as one of seven Steam games, a program got the same backend, variables and AVX setting as under 0.2.1. The 85 games with a rule on 2026-10-18 got the same rules as from all pages, except One Piece Odyssey (see Rules from open sources). A game started with `run steam:<ID>` was looked up in about a second, without network the start went on after two seconds without the rules, and a game Steam installed while it ran was looked up within a minute. Steam installed from the temp folder as the app's button does it. The app lifted the quarantine of 1,933 files when it opened, looked up nothing before its note on downloads was read and the installed game three seconds after, and started Notepad from Finder in two seconds.
 
 0.3.0 is one app on a disk image. The image carried the quarantine of a browser download; the app was copied out of it and opened with an empty home directory, with the build folders out of reach and the Command Line Tools' `python3`, `lipo` and `otool` blocked. The app lifted the quarantine of what it carries. The first bottle took 37 seconds with Wine Mono downloaded from WineHQ into the data folder, and the app's signature stayed valid, so nothing was written into the app. All 12 programs passed with every backend: 48 runs without D3DMetal, 72 after the app installed D3DMetal 4.0 beta 2 and 3.0 from disk images in Downloads named and laid out like Apple's. After the app was moved to another folder, they passed again with `dxmt`, `d3dmetal` and `d3dmetal3`. `freequay fix` set up a Steam game with DirectX packages in 62 seconds, without python3 or Homebrew. Steam installed and showed its sign-in window on its second start, and the app started Notepad from Finder in under a second. Not tried: Apple's download page itself, which needs an Apple Account, and Open Anyway for an app downloaded with a browser.
+
+0.3.1 fixes the `cabextract` of 0.3.0, which left its work folder in the temporary folder of macOS after every call, several hundred MB for each DirectX package a game asked for. On Microsoft's DirectX package (`directx_Jun2010_redist.exe`) it now gives the same 40 cabinets and 40 DLLs as the real cabextract, byte for byte, and leaves no folder behind, also when a call fails. The image was tested like 0.3.0's, with the app approved by the Terminal steps above and Homebrew blocked as well: the first bottle took 61 seconds with the Wine Mono download, `freequay fix` set up a game with `d3dcompiler_43` and `d3dx9_43` in 48 seconds and left nothing in the temporary folder, the launcher removed a work folder older than an hour and kept a newer one, and all 12 programs passed without `--backend` and with `dxvk`.
 
 `tests/` has the small programs behind these tests; build them with mingw-w64 as their first comment says. `tests/rulecheck` shows what the rules changed for a program: its path, command line, environment variables and where `d3d11.dll` comes from.
 
