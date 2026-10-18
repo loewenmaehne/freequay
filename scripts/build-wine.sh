@@ -22,6 +22,9 @@ if [[ ! -f Makefile || "${1:-}" == reconfigure ]]; then
   # winemac.drv with CGL and is always built.
   # build and host fixed to x86_64: the helper tools (widl, winebuild ...) are built as x86_64
   # and run under Rosetta, otherwise configure takes the M1 for the target.
+  # ac_cv_func_pipe2=no: the macOS 27 SDK has pipe2, older macOS does not, and ntdll calls it
+  # without an availability check, so Wine built for macOS 11 would crash on macOS 26 and older.
+  # Without it ntdll uses pipe and fcntl.
   "$SRC/configure" --prefix="$PREFIX" \
     --build=x86_64-apple-darwin --host=x86_64-apple-darwin \
     --enable-archs=i386,x86_64 --disable-tests \
@@ -38,6 +41,7 @@ if [[ ! -f Makefile || "${1:-}" == reconfigure ]]; then
     LDFLAGS="-L$DEPS/lib -Wl,-headerpad_max_install_names" \
     FREETYPE_CFLAGS="-I$DEPS/include/freetype2" FREETYPE_LIBS="-L$DEPS/lib -lfreetype" \
     GNUTLS_CFLAGS="-I$DEPS/include" GNUTLS_LIBS="-L$DEPS/lib -lgnutls" \
+    ac_cv_func_pipe2=no \
     > configure.log 2>&1 || { tail -50 configure.log; exit 1; }
   grep -E '^configure: (WARNING|error)|libMoltenVK|vulkan' configure.log | tail -20 || true
 fi
