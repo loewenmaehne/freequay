@@ -18,9 +18,9 @@
 #                                                   shortcuts in the Start menu and on the desktop
 #                                                   and the programs added here; add one, or take
 #                                                   one off the list with -
-#   freequay applegamingwiki [--if-old]            make the rules from AppleGamingWiki on this Mac;
-#                                                   new and run do it in the background when they
-#                                                   are missing or older than 30 days
+#   freequay applegamingwiki [<bottle>...]         look up the rules from AppleGamingWiki for the
+#                                                   installed Steam games now; run and programs do
+#                                                   it by themselves, each game at most once a week
 #
 # Options for run (override the bottle defaults):
 #   --backend d3dmetal|d3dmetal3|dxmt|dxvk|wined3d   graphics for all programs without a rule
@@ -41,8 +41,8 @@ BOTTLES=$DATA/Bottles
 # from these files whenever a program starts (patches/0005, format in compat/README.md); for
 # every setting the first file that has it wins. The bottle's own rules come first.
 # AppleGamingWiki's content is under CC BY-NC-SA 3.0, which allows no commercial use, so its
-# rules are not part of Freequay: scripts/compat/applegamingwiki makes them on this Mac, in
-# AGW_DIR, outside the Freequay folder.
+# rules are not part of Freequay: scripts/compat/applegamingwiki looks up the Steam games
+# installed here and writes their rules into AGW_DIR, outside the Freequay folder.
 COMPAT=$ROOT/compat
 AGW_DIR=$DATA/compat
 AGW=$ROOT/scripts/compat/applegamingwiki
@@ -87,35 +87,78 @@ compat_files() { # bottle-dir -> rule files, separated by colons
   print -r -- "$out"
 }
 
-# The rules from AppleGamingWiki: download its pages and make the rules from them, about 3 MB in
-# 45 requests, one per second. With --if-old only when they are missing or older than 30 days and
-# nobody tried in the last hour. Without network nothing changes; programs start without them.
-agw_update() { # [--if-old]
-  local tmp ret=0
-  [[ -x $AGW ]] || die "$AGW is missing, build it with scripts/build-app.sh"
-  if [[ ${1:-} == --if-old ]]; then agw_due || return 0; fi
-  mkdir -p "$AGW_DIR"
-  touch "$AGW_DIR/.tried"
-  tmp=$(mktemp -d -t freequay-agw)
-  if ! "$AGW" fetch "$tmp" || ! "$AGW" rules "$tmp" "$AGW_DIR"; then
-    print -u2 "freequay: no new rules from AppleGamingWiki; try again later with: freequay applegamingwiki"
-    ret=1
+# The rules from AppleGamingWiki, game by game: a Steam game is looked up when it is new or its
+# lookup is a week old, with two requests to AppleGamingWiki. Without network nothing changes, the
+# game starts without these rules and the next start tries again; after other errors the next try
+# waits an hour. FREEQUAY_OFFLINE=1 (set by the app until its note on downloads was read) skips
+# the lookups.
+steam_ids() { # bottle-dir -> app IDs of the installed Steam games
+  local f id
+  for f in "$1/drive_c/Program Files (x86)/Steam"/steamapps/appmanifest_<->.acf(N); do
+    id=${${f:t:r}#appmanifest_}
+    [[ $id == 228980 ]] || print -r -- $id  # Steamworks Common Redistributables
+  done
+}
+
+agw_due() { # app IDs -> those never looked up or looked up a week ago or longer
+  local games=$AGW_DIR/applegamingwiki/games.tsv week=$(date -v-7d +%Y-%m-%d) id date rest
+  local -A seen
+  if [[ -f $games ]]; then
+    while IFS=$'\t' read -r id date rest; do [[ $id == \#* ]] || seen[$id]=$date; done < "$games"
   fi
-  rm -rf "$tmp"
+  for id in "$@"; do [[ ${seen[$id]:-} > $week ]] || print -r -- $id; done
+}
+
+agw_lookup() { # [--quick|--background] app IDs: rules again after an update, then the games due
+  local mode= failed=$AGW_DIR/applegamingwiki/.failed ids
+  [[ ${1:-} == --(quick|background) ]] && { mode=$1; shift; }
+  [[ -x $AGW && -z ${FREEQUAY_OFFLINE:-} ]] || return 0
+  ids=($(agw_due "$@"))
+  [[ ! -f $failed ]] || (( $(date +%s) - $(stat -f %m "$failed") > 3600 )) || ids=()
+  mkdir -p "$AGW_DIR/applegamingwiki"
+  if [[ $mode == --background ]]; then
+    agw_stale || (( $#ids )) || return 0
+    nohup /bin/zsh "$ROOT/scripts/freequay" applegamingwiki --ids ${(u)ids} < /dev/null \
+      >> "$AGW_DIR/applegamingwiki.log" 2>&1 &!
+  else
+    agw_refresh
+    (( $#ids )) || return 0
+    agw_run ${mode:+--quick} ${(u)ids} >> "$AGW_DIR/applegamingwiki.log" 2>&1
+  fi
+}
+
+agw_run() { # [--quick] app IDs: the lookup itself
+  local ret=0 quick=()
+  [[ ${1:-} == --quick ]] && { quick=(--quick); shift; }
+  mkdir -p "$AGW_DIR/applegamingwiki"
+  "$AGW" lookup $quick "$AGW_DIR" "$@" || ret=$?
+  # 3: no network, 4: another lookup runs; after other errors the next try waits an hour
+  (( ret == 0 || ret == 3 || ret == 4 )) || touch "$AGW_DIR/applegamingwiki/.failed"
+  (( ret != 0 )) || agw_made_by > "$AGW_DIR/applegamingwiki/made-by"
   return $ret
 }
 
-agw_due() {
-  local now=$(date +%s) rules=$AGW_DIR/applegamingwiki.txt tried=$AGW_DIR/.tried
-  [[ ! -f $rules ]] || (( now - $(stat -f %m "$rules") > 30 * 86400 )) || return 1
-  [[ ! -f $tried ]] || (( now - $(stat -f %m "$tried") > 3600 ))
+agw_made_by() { print -r -- "$(head -1 "$ROOT/VERSION" 2> /dev/null) $(cksum < "$AGW")"; }
+
+agw_stale() { # were the rules written by another version of Freequay?
+  local made=$AGW_DIR/applegamingwiki/made-by
+  [[ -f $AGW_DIR/applegamingwiki/games.tsv ]] || return 1
+  [[ ! -f $made || "$(<$made)" != "$(agw_made_by)" ]]
 }
 
-agw_background() { # agw_update --if-old without waiting for it
-  [[ -x $AGW ]] && agw_due || return 0
-  mkdir -p "$AGW_DIR"
-  touch "$AGW_DIR/.tried"
-  nohup /bin/zsh "$ROOT/scripts/freequay" applegamingwiki < /dev/null > "$AGW_DIR/applegamingwiki.log" 2>&1 &!
+agw_refresh() { # after an update of Freequay, write the rules again from the pages kept
+  agw_stale || return 0
+  if "$AGW" rules "$AGW_DIR" >> "$AGW_DIR/applegamingwiki.log" 2>&1; then
+    agw_made_by > "$AGW_DIR/applegamingwiki/made-by"
+  fi
+}
+
+agw_watch() { # bottle-dir: while Steam runs there, look up the games it installs meanwhile
+  local pid=$AGW_DIR/applegamingwiki/watch-${1:t}.pid
+  [[ -x $AGW && -z ${FREEQUAY_OFFLINE:-} ]] || return 0
+  [[ -f $pid ]] && kill -0 "$(<$pid)" 2> /dev/null && return 0
+  mkdir -p "${pid:h}"
+  nohup /bin/zsh "$ROOT/scripts/freequay" applegamingwiki --watch "${1:t}" < /dev/null >> "$AGW_DIR/applegamingwiki.log" 2>&1 &!
 }
 
 rule_key() { # program.exe or steam:ID -> key of a rule
@@ -246,7 +289,6 @@ case $cmd in
   new)
     dir=$(bottle_dir "${1:-}")
     [[ -e $dir ]] && die "bottle exists already: $dir"
-    agw_background
     # Wine installs Wine Mono (.NET) silently from dist/wine/share/wine/mono. The release archive
     # leaves it out; the first new bottle downloads it from WineHQ. Gecko (HTML) stays off,
     # otherwise Wine asks for the download in a dialog.
@@ -277,6 +319,12 @@ case $cmd in
       esac
     done
     [[ -n "${1:-}" ]] || die "program missing"
+    # a Steam game gets its rules from AppleGamingWiki before it starts, the others in the background
+    if [[ $cmd == run && $1 == steam:<-> ]]; then
+      agw_lookup --quick ${1#steam:} || true
+    elif [[ $cmd == run ]]; then
+      agw_lookup --background $(steam_ids "$dir") || true
+    fi
     # a Steam game by its ID: Steam starts it, and starts itself first if needed
     if [[ $cmd == run && $1 == steam:<-> ]]; then
       set -- "$dir/drive_c/Program Files (x86)/Steam/steam.exe" -applaunch "${1#steam:}" "${@:2}"
@@ -289,7 +337,8 @@ case $cmd in
         print -u2 "freequay: no python3, skipping the setup of Steam games (xcode-select --install)"
       fi
     fi
-    agw_background
+    # while Steam runs, the games it installs get their rules
+    [[ $cmd == run && ${1:t:l} == steam.exe ]] && agw_watch "$dir"
     setup_env "$dir" "$backend" "$avx" "$hud" "$debug"
     # Rosetta reads ROSETTA_ADVERTISE_AVX only at exec; for child processes ntdll sets it itself
     if [[ $cmd == run ]] && grep -qi -- "^exe:[^"$'\t'"]*${1:t}"$'\t'".*env=ROSETTA_ADVERTISE_AVX=1" \
@@ -382,8 +431,30 @@ case $cmd in
     [[ -d $BOTTLES ]] && ls -1 "$BOTTLES" || true
     ;;
   applegamingwiki)
-    [[ -z ${1:-} || $1 == --if-old ]] || die "unknown option: $1"
-    agw_update "${1:-}"
+    case ${1:-} in
+      --ids)  # in the background (agw_lookup)
+        shift; agw_refresh; (( ! $# )) || agw_run "$@" || true ;;
+      --watch)  # follows a bottle while it runs (agw_watch)
+        dir=$(bottle_dir "${2:-}")
+        pid=$AGW_DIR/applegamingwiki/watch-${dir:t}.pid
+        print -r -- $$ > "$pid"
+        for i in {1..60}; do bottle_running "$dir" && break; sleep 1; done
+        while bottle_running "$dir"; do
+          agw_lookup $(steam_ids "$dir") || true
+          sleep 60
+        done
+        rm -f "$pid" ;;
+      *)
+        bottles=("$@"); (( $#bottles )) || bottles=($BOTTLES/*(N/:t))
+        typeset -U ids=()
+        for b in $bottles; do ids+=($(steam_ids "$(bottle_dir "$b")")); done
+        (( $#ids )) || { print "no Steam games installed"; exit 0; }
+        [[ -x $AGW ]] || die "$AGW is missing, build it with scripts/build-app.sh"
+        agw_refresh
+        due=($(agw_due $ids))
+        (( $#due )) || { print "all $#ids games were looked up in the last week"; exit 0; }
+        agw_run $due ;;
+    esac
     ;;
   programs)
     # One line per program: its name, a tab and what run takes for it; first what the bottle has
@@ -391,6 +462,7 @@ case $cmd in
     # (add, tab, path) and the found ones taken off the list (hide, tab, run target).
     dir=$(bottle_dir "${1:-}")
     [[ -d $dir ]] || die "no bottle at $dir"
+    agw_lookup --background $(steam_ids "$dir") || true
     list=$dir/programs.txt
     if [[ -n "${2:-}" ]]; then
       target=$2

@@ -2,9 +2,13 @@
 //
 // AppleGamingWiki (applegamingwiki.com) rates every game for CrossOver, Wine and Parallels on
 // Apple Silicon and collects free-text reports. Its content is under CC BY-NC-SA 3.0, which allows
-// no commercial use, so Freequay does not ship rules taken from it: `freequay applegamingwiki` runs
-// this program, which downloads the pages and writes the rules into
-// ~/Library/Application Support/freequay/compat.
+// no commercial use, so Freequay does not ship rules taken from it. Instead this program looks up
+// the Steam games installed on the Mac, one at a time and each at most once a week, and writes the
+// rules into ~/Library/Application Support/freequay/compat; scripts/freequay runs it when needed.
+// A page's infobox links to steamdb.info/app/<Steam app ID>/, so AppleGamingWiki's list of pages
+// with that link names the pages of a game. They give the same rules as reading all pages did up to
+// Freequay 0.2.1, except for Steam IDs a page lists only as further editions, mostly DLC, with which
+// no game starts.
 //
 // The tips are written by people, so this is careful: a graphics backend becomes a rule only when
 // the reports for a game that runs recommend exactly one backend and none of them reports problems
@@ -12,9 +16,14 @@
 // lines of the notes go to notes.tsv for freequay info, and so do launch options found in the text,
 // which turned out to be too often installer flags or tips for the native Mac version.
 //
-// Usage: applegamingwiki fetch <cache dir>     the wikitext of all pages with a macOS compatibility
-//                                               table, 50 pages per request, one request per second
-//        applegamingwiki rules <cache dir> <out dir>   applegamingwiki.txt, notes.tsv, titles.tsv
+// Usage: applegamingwiki lookup [--quick] <dir> <Steam app ID>...
+//            looks up these games, each at most once a week and with one request per second, and
+//            writes applegamingwiki.txt, notes.tsv and titles.tsv into <dir>; <dir>/applegamingwiki
+//            keeps the pages (pages/<page ID>.json) and which game has which pages (games.tsv).
+//            --quick: one try with a short timeout, for a game about to start.
+//        applegamingwiki rules <dir>
+//            writes the three files again from the pages kept, for instance after an update
+// Exit codes: 3 no network, 4 another lookup is running, 1 other errors.
 //
 // Until Freequay 0.2.1 this was scripts/compat/applegamingwiki.py, and the patterns below are its
 // patterns. They follow Python's re: its whitespace, word characters and word boundaries, and
@@ -380,23 +389,10 @@ func launchOptions(_ texts: [String]) -> (args: [String], env: [String]) {
 let steamDigits = Rx(#"\d+"#)
 let compatibilityTable = Rx(#"\{\{Compatibility/macOS(.*?)\n\}\}"#, .dotMatchesLineSeparators)
 
-func makeRules(cache: String, out: String) throws {
-    let files = try FileManager.default.contentsOfDirectory(atPath: cache)
-        .filter { $0.hasPrefix("pages-") && $0.hasSuffix(".json") }
-        .sorted(by: less)
-    var pages: [[String: Any]] = []
-    for file in files {
-        let data = try Data(contentsOf: URL(fileURLWithPath: cache).appendingPathComponent(file))
-        guard let list = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            throw Failure("\(file) is not a list of pages")
-        }
-        pages += list
-    }
-    guard !pages.isEmpty else { throw Failure("no pages in \(cache)") }
-    let stored = (try? String(contentsOfFile: cache + "/version", encoding: .utf8)).map(strip) ?? ""
-    let version = stored.isEmpty ? today() : stored
-
-    let rules = Rules()
+// The rules for the games in keep, from their pages in the order of their page IDs, as AppleGamingWiki
+// lists them; version names the date of the newest lookup.
+func makeRules(pages: [[String: Any]], keep: Set<Exact>, version: String, out: String) throws {
+let rules = Rules()
     var backends: [(key: String, found: Set<String>)] = []  // backend names are ASCII
     var stats = (pages: 0, steam: 0, backend: 0, args: 0, env: 0)
     for page in pages {
@@ -459,32 +455,33 @@ func makeRules(cache: String, out: String) throws {
         }
     }
 
+    let kept = { (key: String) in keep.contains(Exact(String(key.unicodeScalars.drop { $0 != ":" }.dropFirst()))) }
     try FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
     var notesFile = "# Notes from AppleGamingWiki on the rules in applegamingwiki.txt next to it: key, source, text, for\n"
         + "# freequay info. License CC BY-NC-SA 3.0, as that file says. Made by freequay applegamingwiki.\n"
-    let noteRows = rules.notes.flatMap { note in note.texts.map { (key: note.key, text: $0) } }
+    let noteRows = rules.notes.filter { kept($0.key) }.flatMap { note in note.texts.map { (key: note.key, text: $0) } }
     for row in stableSorted(noteRows, by: { noteOrder($0.key, $1.key) }) {
         notesFile += row.key + "\tapplegamingwiki\t" + clean(row.text) + "\n"
     }
     var titlesFile = "# Steam app ID and title from AppleGamingWiki, for freequay info. License CC BY-NC-SA 3.0.\n"
-    for title in stableSorted(rules.titles, by: { (number($0.id) ?? 0) < (number($1.id) ?? 0) }) {
+    for title in stableSorted(rules.titles.filter { keep.contains(Exact($0.id)) }, by: { (number($0.id) ?? 0) < (number($1.id) ?? 0) }) {
         titlesFile += title.id + "\t" + title.title + "\n"
     }
     var rulesFile = [
-        "Freequay: rules from AppleGamingWiki (applegamingwiki.com), pages with a macOS compatibility table,",
-        "as of \(version), made on this Mac. License CC BY-NC-SA 3.0 (creativecommons.org/licenses/by-nc-sa/3.0/):",
+        "Freequay: rules from AppleGamingWiki (applegamingwiki.com) for the Steam games on this Mac, from their pages",
+        "with a macOS compatibility table as of \(version). License CC BY-NC-SA 3.0 (creativecommons.org/licenses/by-nc-sa/3.0/):",
         "attribution, non-commercial, share alike; notes.tsv and titles.tsv next to it are under the same license.",
         "A backend only when the reports for a game that runs recommend exactly one and none reports problems with it;",
         "variables only from sections about CrossOver and Wine. Made by freequay applegamingwiki, do not edit by hand.",
     ].map { "# " + $0 + "\n" }.joined()
-    for rule in stableSorted(rules.rules, by: { ruleOrder($0.key, $1.key) }) where !rule.directives.isEmpty {
+    for rule in stableSorted(rules.rules, by: { ruleOrder($0.key, $1.key) }) where !rule.directives.isEmpty && kept(rule.key) {
         rulesFile += rule.key + "\t" + rule.directives.joined(separator: "\t") + "\n"
     }
     // ntdll reads the rules at every program start, so each file is replaced in one step
     try write(out + "/notes.tsv", notesFile)
     try write(out + "/titles.tsv", titlesFile)
     try write(out + "/applegamingwiki.txt", rulesFile)
-    print("\(out)/applegamingwiki.txt: \(stats.pages) pages, \(stats.steam) with a Steam ID; rules: \(stats.backend) backend, "
+    print("\(out)/applegamingwiki.txt: \(keep.count) games, \(stats.pages) pages; rules: \(stats.backend) backend, "
           + "\(stats.args) launch options, \(stats.env) variables")
 }
 
@@ -499,11 +496,65 @@ func today() -> String {
     return format.string(from: Date())
 }
 
+// MARK: the games looked up
+
+typealias Game = (id: String, date: String, pages: [Int])
+
+// games.tsv: Steam app ID, date of the lookup, page IDs or - for none
+func readGames(_ cache: String) -> [Game] {
+    guard let text = try? String(contentsOfFile: cache + "/games.tsv", encoding: .utf8) else { return [] }
+    return text.split(separator: "\n").compactMap { line in
+        let f = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+        guard f.count == 3, !f[0].hasPrefix("#") else { return nil }
+        return (f[0], f[1], f[2] == "-" ? [] : f[2].split(separator: ",").compactMap { Int($0) })
+    }
+}
+
+func writeGames(_ cache: String, _ games: [Game]) throws {
+    var text = "# Steam app ID, date of the lookup, AppleGamingWiki page IDs (- for none). Made by freequay applegamingwiki.\n"
+    for game in games.sorted(by: { (number($0.id) ?? 0) < (number($1.id) ?? 0) }) {
+        text += game.id + "\t" + game.date + "\t" + (game.pages.isEmpty ? "-" : game.pages.map(String.init).joined(separator: ",")) + "\n"
+    }
+    try write(cache + "/games.tsv", text)
+}
+
+func days(since date: String) -> Int {
+    let format = DateFormatter()
+    format.locale = Locale(identifier: "en_US_POSIX")
+    format.dateFormat = "yyyy-MM-dd"
+    guard let then = format.date(from: date) else { return .max }
+    return Calendar.current.dateComponents([.day], from: then, to: Date()).day ?? .max
+}
+
+// One lookup or rewrite at a time: waits up to 5 s (quick) or 20 s for the lock, which ends with the process.
+func lock(_ cache: String, quick: Bool) async throws {
+    try FileManager.default.createDirectory(atPath: cache + "/pages", withIntermediateDirectories: true)
+    let fd = open(cache + "/.lock", O_CREAT | O_RDWR, 0o644)
+    guard fd >= 0 else { throw Failure("cannot open \(cache)/.lock") }
+    for _ in 0..<(quick ? 10 : 40) {
+        if flock(fd, LOCK_EX | LOCK_NB) == 0 { return }
+        try await Task.sleep(nanoseconds: 500_000_000)
+    }
+    throw Failure("another lookup is running", code: 4)
+}
+
+// the rules from all pages kept, for the games looked up
+func writeRules(dir: String) throws {
+    let cache = dir + "/applegamingwiki"
+    let games = readGames(cache)
+    let pages = Set(games.flatMap(\.pages)).sorted().compactMap { id -> [String: Any]? in
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: cache + "/pages/\(id).json")) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+    try makeRules(pages: pages, keep: Set(games.map { Exact($0.id) }), version: games.map(\.date).max() ?? today(), out: dir)
+}
+
 // MARK: download
 
 struct Failure: LocalizedError {
     let errorDescription: String?
-    init(_ description: String) { errorDescription = description }
+    let code: Int32
+    init(_ description: String, code: Int32 = 1) { errorDescription = description; self.code = code }
 }
 
 // no network, or a firewall that does not let the program out: then there is no point in trying again soon
@@ -515,27 +566,32 @@ func unreachable(_ error: Error) -> Bool {
         || error.domain == NSPOSIXErrorDomain && [EPERM, EACCES].contains(Int32(error.code))
 }
 
-// one request to the MediaWiki API, then a second's pause; up to four tries on other errors
-func get(_ params: [(String, String)]) async throws -> [String: Any] {
+var lastRequest = Date.distantPast
+
+// one request to the MediaWiki API, at least a second after the one before; up to four tries on errors, one when quick
+func get(_ params: [(String, String)], quick: Bool) async throws -> [String: Any] {
     let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
     let query = (params + [("format", "json"), ("formatversion", "2")])
         .map { $0.0 + "=" + $0.1.addingPercentEncoding(withAllowedCharacters: unreserved)! }.joined(separator: "&")
-    var request = URLRequest(url: URL(string: api + "?" + query)!, timeoutInterval: 30)
+    var request = URLRequest(url: URL(string: api + "?" + query)!, timeoutInterval: quick ? 10 : 30)
     request.setValue(agent, forHTTPHeaderField: "User-Agent")
     var pause: UInt64 = 5
-    for attempt in 1...4 {
+    let tries = quick ? 1 : 4
+    for attempt in 1...tries {
         do {
+            let wait = 1 - Date().timeIntervalSince(lastRequest)
+            if wait > 0 { try await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
+            lastRequest = Date()
             let (data, response) = try await URLSession.shared.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard status == 200 else { throw Failure("HTTP status \(status)") }
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw Failure("no JSON object") }
             if let error = json["error"] as? [String: Any] { throw Failure("API error \(error["code"] ?? "")") }
-            try await Task.sleep(nanoseconds: 1_000_000_000)
             return json
         } catch where unreachable(error) {
-            throw Failure("AppleGamingWiki is not reachable: \(error.localizedDescription)")
+            throw Failure("AppleGamingWiki is not reachable: \(error.localizedDescription)", code: 3)
         } catch {
-            if attempt == 4 { throw Failure("AppleGamingWiki did not answer: \(error.localizedDescription)") }
+            if attempt == tries { throw Failure("AppleGamingWiki did not answer: \(error.localizedDescription)") }
             FileHandle.standardError.write(Data("  retry \(attempt): \(error.localizedDescription)\n".utf8))
             try await Task.sleep(nanoseconds: pause * 1_000_000_000)
             pause *= 2
@@ -544,33 +600,52 @@ func get(_ params: [(String, String)]) async throws -> [String: Any] {
     throw Failure("unreachable")
 }
 
-func fetch(cache: String) async throws {
-    let fm = FileManager.default
-    try fm.createDirectory(atPath: cache, withIntermediateDirectories: true)
-    for file in try fm.contentsOfDirectory(atPath: cache) where file.hasPrefix("pages-") {
-        try fm.removeItem(atPath: cache + "/" + file)
+// Looks up the games that are due: never looked up, or a week ago or longer. Pages found are kept, and
+// the rules are written again after the lookups, also when one of them failed.
+func lookup(dir: String, ids: [String], quick: Bool) async throws {
+    let cache = dir + "/applegamingwiki"
+    try await lock(cache, quick: quick)
+    var games = readGames(cache)
+    let due = unique(ids).filter { id in
+        !id.isEmpty && id.unicodeScalars.allSatisfy { $0.properties.numericType == .decimal && $0.isASCII }
+            && games.first(where: { $0.id == id }).map { days(since: $0.date) >= 7 } ?? true
     }
-    var titles: [String] = [], next: (String, String)?
-    repeat {
-        let data = try await get([("action", "query"), ("list", "embeddedin"), ("eititle", "Template:Compatibility/macOS"),
-                                  ("einamespace", "0"), ("eilimit", "500")] + (next.map { [$0] } ?? []))
-        let embedded = (data["query"] as? [String: Any])?["embeddedin"] as? [[String: Any]] ?? []
-        titles += embedded.compactMap { $0["title"] as? String }
-        next = ((data["continue"] as? [String: Any])?["eicontinue"] as? String).map { ("eicontinue", $0) }
-    } while next != nil
-    guard !titles.isEmpty else { throw Failure("AppleGamingWiki lists no pages with a macOS compatibility table") }
-    print("\(titles.count) pages")
-    try JSONSerialization.data(withJSONObject: titles).write(to: URL(fileURLWithPath: cache + "/titles.json"))
-    for start in stride(from: 0, to: titles.count, by: 50) {
-        let batch = titles[start..<min(start + 50, titles.count)]
-        let data = try await get([("action", "query"), ("prop", "revisions"), ("rvprop", "content|timestamp"),
-                                  ("rvslots", "main"), ("titles", batch.joined(separator: "|"))])
-        guard let pages = (data["query"] as? [String: Any])?["pages"] as? [Any] else { throw Failure("answer without pages") }
-        try JSONSerialization.data(withJSONObject: pages)
-            .write(to: URL(fileURLWithPath: cache + String(format: "/pages-%03d.json", start / 50)))
-        print("\(min(start + 50, titles.count))/\(titles.count)")
+    var failure: Error?, changed = false
+    for id in due {
+        do {
+            let links = try await get([("action", "query"), ("list", "exturlusage"), ("euprotocol", "https"),
+                                       ("euquery", "steamdb.info/app/\(id)/"), ("eunamespace", "0"), ("eulimit", "50")], quick: quick)
+            let found = ((links["query"] as? [String: Any])?["exturlusage"] as? [[String: Any]] ?? [])
+            var pageIDs = Array(Set(found.compactMap { $0["pageid"] as? Int })).sorted()
+            if !pageIDs.isEmpty {
+                let data = try await get([("action", "query"), ("prop", "revisions"), ("rvprop", "content|timestamp"),
+                                          ("rvslots", "main"), ("pageids", pageIDs.map(String.init).joined(separator: "|"))],
+                                         quick: quick)
+                let pages = (data["query"] as? [String: Any])?["pages"] as? [[String: Any]] ?? []
+                pageIDs = []
+                for page in pages {
+                    guard let pageID = page["pageid"] as? Int, page["revisions"] != nil else { continue }
+                    try JSONSerialization.data(withJSONObject: page).write(to: URL(fileURLWithPath: cache + "/pages/\(pageID).json"),
+                                                                          options: .atomic)
+                    pageIDs.append(pageID)
+                }
+                pageIDs.sort()
+            }
+            games.removeAll { $0.id == id }
+            games.append((id, today(), pageIDs))
+            changed = true
+            let titles = found.compactMap { $0["title"] as? String }
+            print("steam:\(id): " + (pageIDs.isEmpty ? "no page" : unique(titles).joined(separator: ", ")))
+        } catch {
+            failure = error
+            break
+        }
     }
-    try write(cache + "/version", today() + "\n")
+    if changed {
+        try writeGames(cache, games)
+        try writeRules(dir: dir)
+    }
+    if let failure { throw failure }
 }
 
 @main
@@ -578,16 +653,21 @@ enum AppleGamingWiki {
     static func main() async {
         let args = CommandLine.arguments
         do {
-            switch (args.count, args.count > 1 ? args[1] : "") {
-            case (3, "fetch"): try await fetch(cache: args[2])
-            case (4, "rules"): try makeRules(cache: args[2], out: args[3])
+            switch args.count > 1 ? args[1] : "" {
+            case "lookup" where args.count > 3 && args[2] == "--quick":
+                try await lookup(dir: args[3], ids: Array(args[4...]), quick: true)
+            case "lookup" where args.count > 2 && args[2] != "--quick":
+                try await lookup(dir: args[2], ids: Array(args[3...]), quick: false)
+            case "rules" where args.count == 3:
+                try await lock(args[2] + "/applegamingwiki", quick: false)
+                try writeRules(dir: args[2])
             default:
-                FileHandle.standardError.write(Data("usage: applegamingwiki fetch <cache dir> | rules <cache dir> <out dir>\n".utf8))
+                FileHandle.standardError.write(Data("usage: applegamingwiki lookup [--quick] <dir> <Steam app ID>... | rules <dir>\n".utf8))
                 exit(2)
             }
         } catch {
             FileHandle.standardError.write(Data("applegamingwiki: \(error.localizedDescription)\n".utf8))
-            exit(1)
+            exit((error as? Failure)?.code ?? 1)
         }
     }
 }

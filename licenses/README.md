@@ -39,7 +39,7 @@ Each row of `notes.tsv` names its source and keeps that source's license.
 - D3DMetal: Apple's, under Apple's license. `scripts/install-d3dmetal.sh` copies it from Apple's Game Porting Toolkit download.
 - Wine Mono: the first `freequay new` downloads it unchanged from WineHQ (dl.winehq.org/wine/wine-mono/10.4.1), where its source is as well.
 - winetricks: `freequay fix` downloads it from its GitHub repository.
-- The rules from AppleGamingWiki: its content is under CC BY-NC-SA 3.0, which allows no commercial use. `scripts/compat/applegamingwiki` downloads the pages from applegamingwiki.com and makes the rules on your Mac, in `~/Library/Application Support/freequay/compat`; the header of the file names the license (creativecommons.org/licenses/by-nc-sa/3.0/).
+- The rules from AppleGamingWiki: its content is under CC BY-NC-SA 3.0, which allows no commercial use. `scripts/compat/applegamingwiki` looks up the pages of the installed Steam games on applegamingwiki.com and makes the rules on your Mac, in `~/Library/Application Support/freequay/compat`; the header of the file names the license (creativecommons.org/licenses/by-nc-sa/3.0/).
 
 ## Source code
 
