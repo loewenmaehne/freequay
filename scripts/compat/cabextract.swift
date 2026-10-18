@@ -18,9 +18,17 @@ struct Options {
     var files: [String] = []
 }
 
+// The work folder in the temporary folder. exit() skips defer, so finish() removes it before every end.
+var workDir: URL?
+
+func finish(_ code: Int32) -> Never {
+    if let workDir { try? FileManager.default.removeItem(at: workDir) }
+    exit(code)
+}
+
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data("cabextract: \(message)\n".utf8))
-    exit(1)
+    finish(1)
 }
 
 func parse(_ args: [String]) -> Options {
@@ -90,7 +98,7 @@ let options = parse(Array(CommandLine.arguments.dropFirst()))
 if options.files.isEmpty { fail("no file given") }
 let fm = FileManager.default
 let work = fm.temporaryDirectory.appendingPathComponent("freequay-cab-\(UUID().uuidString)")
-defer { try? fm.removeItem(at: work) }
+workDir = work
 var errors = 0
 
 for file in options.files {
@@ -140,7 +148,10 @@ for file in options.files {
                 errors += 1
             }
         }
+        // what the filter left out, and the cabinet itself, are not needed any more
+        try? fm.removeItem(at: part)
+        try? fm.removeItem(at: cabFile)
     }
 }
 if !options.quiet && !options.list { print(errors == 0 ? "\nAll done, no errors." : "\nThere were \(errors) errors.") }
-exit(errors == 0 ? 0 : 1)
+finish(errors == 0 ? 0 : 1)
