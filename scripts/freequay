@@ -56,6 +56,11 @@ COMPAT_FILES=($COMPAT/manual.txt $AGW_DIR/applegamingwiki.txt $COMPAT/protonfixe
 WINETRICKS=$CACHE/winetricks-20260125
 [[ ! -f $ROOT/downloads/compat/${WINETRICKS:t} ]] || WINETRICKS=$ROOT/downloads/compat/${WINETRICKS:t}  # a build tree
 
+# The cabextract of Freequay 0.3.0 left its work folders in the temporary folder of macOS (which
+# TMPDIR does not move). One unchanged for over an hour belongs to no running unpack.
+cab_tmp=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null) || cab_tmp=
+[[ -z $cab_tmp ]] || for cab_dir in ${cab_tmp%/}/freequay-cab-*(N/mh+1); do rm -rf -- "$cab_dir"; done
+
 die() { print -u2 -- "freequay: $*"; exit 1; }
 
 bottle_dir() {
