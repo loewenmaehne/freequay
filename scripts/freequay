@@ -173,6 +173,54 @@ agw_watch() { # bottle-dir: while Steam runs there, look up the games it install
   nohup /bin/zsh "$ROOT/scripts/freequay" applegamingwiki --watch "${1:t}" < /dev/null >> "$AGW_DIR/applegamingwiki.log" 2>&1 &!
 }
 
+# Steam updates itself when it starts, twice on its first start in a new bottle. After installing an
+# update it writes "Committing NTFS transaction" into logs/bootstrap_log.txt, starts a new copy of
+# itself, which writes "Startup - Steam Client launched" there, and ends with exit code 42. Nothing
+# brings Steam back when that new copy does not start, or when the old one hangs while starting it.
+# steam_follow watches each start of Steam until its own window (the web helper) is up: 30 seconds
+# after an update without a new copy it ends the Steam of the bottle and starts it again, at most twice.
+steam_watch() { # bottle-dir steam.exe [args]: follow this start of Steam in the background
+  local pid=$1/steam-watch.pid
+  [[ -f $pid ]] && kill -0 "$(<$pid)" 2> /dev/null && return 0
+  nohup /bin/zsh "$ROOT/scripts/freequay" steam-watch "${1:t}" "${@:2}" < /dev/null > /dev/null 2>&1 &!
+}
+
+steam_follow() { # bottle-dir steam.exe [args]
+  local dir=$1 exe=$2 from now state commit restarted=0 restarts=0 began=$SECONDS
+  local log=${2:h}/logs/bootstrap_log.txt web=${2:h}/logs/webhelper.txt pid=$1/steam-watch.pid
+  shift 2
+  print -r -- $$ > "$pid"
+  trap "rm -f ${(q)pid}" EXIT
+  from=$(date '+%Y-%m-%d %H:%M:%S')  # Steam writes the local time; lines before this start do not count
+  while (( SECONDS - began < 1800 )); do
+    sleep 2
+    # Steam's window is up: from here on Steam ends only when it is quit
+    if [[ -f $web ]] && tail -c 65536 "$web" | LC_ALL=C awk -v from="$from" 'substr($0, 2, 19) >= from &&
+        /\] Startup - webhelper launched/ { up = 1 } END { exit !up }'; then
+      break
+    fi
+    # the time of an update after which no new copy has started yet
+    state=$(tail -c 65536 "$log" 2> /dev/null | LC_ALL=C awk -v from="$from" '{ sub(/\r$/, "") }
+      substr($0, 2, 19) < from { next }
+      /\] Committing NTFS transaction/ { s = substr($0, 2, 19) }
+      /\] Startup - Steam Client launched/ { s = "" }
+      END { print s }') || state=
+    now=$(date +%s)
+    if [[ -n $state ]]; then
+      commit=$(date -j -f '%Y-%m-%d %H:%M:%S' "$state" +%s 2> /dev/null) || continue
+      (( now - commit >= 30 && now - restarted >= 30 )) || continue
+      (( restarts++ < 2 )) || break
+      print -r -- "$(date '+%Y-%m-%d %H:%M:%S') Steam did not come back after its update; starting it again" >> "$dir/steam-watch.log"
+      "$WINE_DIR/bin/wine" taskkill /f /im steam.exe > /dev/null 2>&1 || true
+      agw_watch "$dir"
+      ( cd "${exe:h}" && exec "$WINE_DIR/bin/wine" "$exe" "$@" ) < /dev/null > /dev/null 2>&1 &!
+      restarted=$now
+    elif (( SECONDS - began > 60 )) && ! bottle_running "$dir"; then
+      break  # Steam ended, and not for an update
+    fi
+  done
+}
+
 rule_key() { # program.exe or steam:ID -> key of a rule
   case $1 in
     steam:<->) print -r -- "$1" ;;
@@ -351,6 +399,8 @@ case $cmd in
         ${(s.:.)FREEQUAY_COMPAT_FILES} 2>/dev/null; then
       export ROSETTA_ADVERTISE_AVX=1
     fi
+    # Steam restarts itself after its updates; when a restart does not come, it is started again
+    [[ $cmd == run && ${1:t:l} == steam.exe && -f ${1:a} ]] && steam_watch "$dir" "${1:a}" "${@:2}"
     if [[ $cmd == run && -f ${1:a} ]]; then
       # start from the program's directory, many games expect that
       exe=${1:a}; shift
@@ -431,7 +481,13 @@ case $cmd in
     ;;
   kill)
     dir=$(bottle_dir "${1:-}")
+    # first the watcher of a Steam start, which would start Steam again
+    [[ -f $dir/steam-watch.pid ]] && kill "$(<$dir/steam-watch.pid)" 2> /dev/null || true
+    rm -f "$dir/steam-watch.pid"
     WINEPREFIX="$dir" "$WINE_DIR/bin/wineserver" -k || true
+    ;;
+  steam-watch)  # follows a start of Steam until its window is up (steam_watch)
+    steam_follow "$(bottle_dir "${1:-}")" "${@:2}"
     ;;
   list)
     [[ -d $BOTTLES ]] && ls -1 "$BOTTLES" || true
