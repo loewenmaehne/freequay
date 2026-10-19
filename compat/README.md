@@ -51,6 +51,8 @@ A program without a `backend` rule, or with one for a backend that is not instal
 
 ntdll also sets environment variables before a child process starts, so variables that are read before Wine runs work too: `env=ROSETTA_ADVERTISE_AVX=1` makes Rosetta report AVX.
 
+The microphone is off for every program (patch 0009). `env=FREEQUAY_MICROPHONE=1` allows it for the programs a rule matches, for instance a game with voice chat: `freequay rule <bottle> exe:<game.exe> env=FREEQUAY_MICROPHONE=1`, and the same line with `-` instead of the directive takes it back. With a `steam:` key it applies to the game and the programs it starts. Freequay.app declares the microphone to macOS, so macOS can ask for permission when such a game records for the first time; a program started from the Terminal uses the Terminal's permission instead.
+
 Directives for the one-time setup (`freequay fix`, once per bottle):
 
 | Directive | Effect |
