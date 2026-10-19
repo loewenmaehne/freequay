@@ -25,6 +25,8 @@ if [[ ! -f Makefile || "${1:-}" == reconfigure ]]; then
   # ac_cv_func_pipe2=no: the macOS 27 SDK has pipe2, older macOS does not, and ntdll calls it
   # without an availability check, so Wine built for macOS 11 would crash on macOS 26 and older.
   # Without it ntdll uses pipe and fcntl.
+  # GStreamer for winegstreamer (videos and sounds of Media Foundation and DirectShow) comes from
+  # scripts/build-gstreamer.sh, found through pkg-config in deps/.
   "$SRC/configure" --prefix="$PREFIX" \
     --build=x86_64-apple-darwin --host=x86_64-apple-darwin \
     --enable-archs=i386,x86_64 --disable-tests \
@@ -32,7 +34,7 @@ if [[ ! -f Makefile || "${1:-}" == reconfigure ]]; then
     --with-coreaudio --with-cups --with-opencl --without-opengl \
     --with-freetype --with-gnutls --with-vulkan \
     --without-alsa --without-capi --without-dbus --without-ffmpeg --without-fontconfig \
-    --without-gettext --without-gettextpo --without-gphoto --without-gssapi --without-gstreamer \
+    --without-gettext --without-gettextpo --without-gphoto --without-gssapi --with-gstreamer \
     --without-hwloc --without-inotify --without-krb5 --without-netapi --without-oss \
     --without-pcap --without-pcsclite --without-pulse --without-sane --without-sdl \
     --without-udev --without-unwind --without-usb --without-v4l2 \
