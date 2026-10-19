@@ -16,7 +16,8 @@ SRC=$ROOT/sources
 GST=$SRC/gstreamer/subprojects
 DEPS=$ROOT/deps
 WORK=$ROOT/build/gstreamer
-MESON=$ROOT/tools/meson/venv/bin/meson
+VENV=$ROOT/tools/meson/venv
+MESON=$VENV/bin/meson
 PCRE2=$ROOT/downloads/pcre2/x/pcre2-10.42
 JOBS=8
 
@@ -25,9 +26,16 @@ export MACOSX_DEPLOYMENT_TARGET=11.0
 export PATH="/opt/homebrew/opt/bison/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 unset CFLAGS CXXFLAGS OBJCFLAGS LDFLAGS PKG_CONFIG_PATH
 
-for f in $MESON $GST/gstreamer $GST/gst-plugins-bad $SRC/glib/subprojects/proxy-libintl $PCRE2; do
-  [[ -e $f ]] || { print -u2 "missing $f, run scripts/fetch-sources.sh (meson: scripts/build-dxvk.sh)"; exit 1; }
+for f in $GST/gstreamer $GST/gst-plugins-bad $SRC/glib/subprojects/proxy-libintl $PCRE2; do
+  [[ -e $f ]] || { print -u2 "missing $f, run scripts/fetch-sources.sh"; exit 1; }
 done
+# meson from PyPI in its own venv, as in scripts/build-dxvk.sh, which runs later
+if [[ ! -x $MESON ]]; then
+  python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' ||
+    { print -u2 "need Python 3.10 or newer as python3 (brew install python)"; exit 1; }
+  python3 -m venv "$VENV"
+  "$VENV/bin/pip" install --quiet meson==1.12.1
+fi
 [[ ${1:-} != clean ]] || rm -rf "$WORK"
 mkdir -p "$WORK" "$DEPS/lib/pkgconfig"
 
