@@ -3,3 +3,5 @@
 *.png
 *.log
 *.dxvk-cache
+*.mp4
+make-clip
