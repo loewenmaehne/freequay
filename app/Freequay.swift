@@ -302,6 +302,9 @@ final class Model: ObservableObject {
         let started = Date()
         launch(["run", bottle, target]) { [weak self] code, output in
             guard let self else { return }
+            // Steam ends with 42 after an update and leaves the rest to a new copy of itself (scripts/freequay)
+            let steam = target.hasPrefix("steam:") || (target as NSString).lastPathComponent.lowercased() == "steam.exe"
+            let code = steam && code == 42 ? 0 : code
             if self.bottle == bottle { loadPrograms() }  // an installer may have added programs
             // report what kept a program from starting; one that ran for a while may end as it likes
             let error = code == 0 ? nil : Model.error(in: output)
@@ -375,7 +378,7 @@ final class Model: ObservableObject {
             }
             if self.bottle == bottle { loadPrograms() }
             begin(steam.path, name: "Steam", in: bottle)
-            if starting != nil { status = "Starting Steam. The first start downloads about 480 MB and takes a minute or two." }
+            if starting != nil { status = "Starting Steam. The first start downloads about 575 MB, restarts Steam twice and takes two minutes or more." }
         }
     }
 
