@@ -8,7 +8,7 @@ Freequay runs Windows games and programs on Apple Silicon Macs, for free: Wine b
 
 You need an Apple Silicon Mac with macOS 14 or newer, Rosetta 2 and about 1.5 GB of free disk space; Steam takes another 1.5 GB, plus your games. Neither Xcode, its Command Line Tools nor Homebrew are needed. Most Macs got Rosetta 2 with the first Intel app they opened; otherwise run `softwareupdate --install-rosetta` once in Terminal.
 
-1. Download `Freequay-0.3.1.dmg` from the [latest release](https://github.com/loewenmaehne/freequay/releases/latest) and open it.
+1. Download `Freequay-0.4.0.dmg` from the [latest release](https://github.com/loewenmaehne/freequay/releases/latest) and open it.
 2. Drag Freequay into Applications and open it there. The first time, macOS refuses it because the app is not notarized by Apple: open System Settings, Privacy & Security, click Open Anyway next to the note about Freequay and confirm. After that it opens normally.
 3. The app lists once which servers Freequay downloads from. Then click Create a bottle, a Windows drive of its own (about a minute, with the download of Wine Mono), and install Steam with its button, or drop the installer of a Windows program on the window.
 
@@ -24,13 +24,13 @@ Tested on a MacBook Air M1 with 16 GB and macOS 27.0.1, not yet on an older macO
 
 | Program | Result |
 |---|---|
-| Steam for Windows | installs, updates itself and signs in. The first start downloads about 575 MB in two updates; after each update Steam closes to start again, and in two of three test bottles on 2026-10-18 it did not come back. Stop all programs and a new start helped, and the sign-in window then came after about 20 seconds. |
+| Steam for Windows | installs, updates itself and signs in. The first start downloads about 575 MB in two updates; after each one Steam starts a new copy of itself and ends. On a busy Mac that copy sometimes did not come, and the old Steam stayed without a window; Freequay then ends it 30 seconds after the update and starts Steam again. In fresh test bottles on 2026-10-19 the sign-in window came after about two minutes. |
 | Team Fortress 2 through Steam (Direct3D 9) | runs smoothly against bots, best in fullscreen |
 | FINAL FANTASY XIV: Dawntrail Benchmark (Direct3D 11, .NET launcher) | runs through: 2679 points at 1920×1080 "High (Desktop)", 23 to 35 FPS in the foreground |
 | Rockstar Games Launcher with Social Club | installs, updates itself, signs in and opens its main window |
 | Black Myth: Wukong Benchmark Tool (Direct3D 12, D3DMetal) | hangs while loading, then Unreal's crash reporter comes up |
 
-Games that play videos through Media Foundation may show them black, because GStreamer is not built yet. Apple's D3DMetal (Direct3D 11 and 12) is not included; the app leads you to Apple's own download and installs it from there. Without it, Direct3D 12 runs on Wine's own d3d12 with vkd3d, tried so far only with small test programs.
+Videos in games play through GStreamer, for Media Foundation and DirectShow alike: MP4, AVI, Matroska, MPEG program streams, FLV and WAV, with H.264, H.265, MPEG-2, Motion JPEG and ProRes decoded by Apple's VideoToolbox and AAC and MP3 by AudioToolbox. There is no FFmpeg, so videos in WMV, VP8, VP9, Theora or MPEG-1 do not play. Tested through Wine so far is H.264 with AAC in MP4, with a test clip (see Tests), not yet the videos of a game. Apple's D3DMetal (Direct3D 11 and 12) is not included; the app leads you to Apple's own download and installs it from there. Without it, Direct3D 12 runs on Wine's own d3d12 with vkd3d, tried so far only with small test programs.
 
 ## Using the app
 
@@ -52,8 +52,8 @@ Everything else, such as the graphics per program, is done in Terminal with `fre
 
 ```bash
 cd ~
-curl -LO https://github.com/loewenmaehne/freequay/releases/download/v0.3.1/Freequay-0.3.1.dmg
-hdiutil attach -nobrowse -mountpoint /tmp/freequay Freequay-0.3.1.dmg
+curl -LO https://github.com/loewenmaehne/freequay/releases/download/v0.4.0/Freequay-0.4.0.dmg
+hdiutil attach -nobrowse -mountpoint /tmp/freequay Freequay-0.4.0.dmg
 cp -R /tmp/freequay/Freequay.app /Applications/
 hdiutil detach /tmp/freequay
 alias freequay=/Applications/Freequay.app/Contents/SharedSupport/freequay/scripts/freequay
@@ -87,7 +87,7 @@ Bottles live in `~/Library/Application Support/freequay/Bottles`. `run` starts a
 
 `freequay app <bottle> <program.exe|steam:ID> <backend>` sets the graphics for one program, `-` instead of the backend deletes it, and without a program the command lists the bottle's rules. `freequay rule` adds any directive, `freequay info` shows everything that applies to a program. New rules apply at the next program start, also while Steam is running. `freequay applegamingwiki` looks up the installed Steam games in AppleGamingWiki at once; `run` and `programs` do it by themselves.
 
-Steam for Windows without the app: install it with `SteamSetup.exe /S` and start `steam.exe` with `run`. Before Steam starts, `run` catches up on the one-time setup the rules ask for (`freequay fix`).
+Steam for Windows without the app: install it with `SteamSetup.exe /S` and start `steam.exe` with `run`. Before Steam starts, `run` catches up on the one-time setup the rules ask for (`freequay fix`). Until Steam's window is up, `run` also follows Steam's restarts after its updates: if no new copy of Steam has started 30 seconds after an update, it ends what is left of Steam in the bottle and starts Steam again, at most twice, and notes that in `steam-watch.log` in the bottle. `freequay kill` stops this as well.
 
 ## About
 
@@ -99,6 +99,7 @@ Freequay is not affiliated with, endorsed by or supported by CodeWeavers or Appl
 
 - Wine 11.0 with all CodeWeavers patches from `crossover-sources-26.3.0.tar.gz`: msync, the D3DMetal hooks in winemac.drv, Rosetta tweaks and their fixes for single programs (Steam, the Rockstar Games Launcher, Epic, Ubisoft Connect, GTA IV and others). Built as x86_64 for Rosetta 2; 32-bit programs run through WoW64.
 - FreeType, GnuTLS, nettle and gmp as x86_64 libraries from the same package. nettle 3.10 comes from the GNU release because the package lacks its `Makefile.in`.
+- GStreamer 1.24.4 with GLib 2.78.0 from the same package, for Wine's winegstreamer, which plays the videos and sounds of Media Foundation and DirectShow: the core, base and good plugins for the containers, and from the bad plugins the parsers and applemedia, which decodes through Apple's VideoToolbox and AudioToolbox. pcre2 10.42 and proxy-libintl 0.4, which GLib needs and the package lacks, come from their own releases.
 - Graphics backends, chosen per program:
   - `dxmt`: DXMT 0.80 (Feifan He, MIT; versions after 0.80 are LGPL-2.1), Direct3D 10 and 11 on Metal.
   - `dxvk`: DXVK 1.10.3, CodeWeavers' Mac version from the same package (zlib), Direct3D 9 and 11 over Vulkan, with CodeWeavers' MoltenVK (Apache-2.0), which emulates geometry shaders.
@@ -112,7 +113,7 @@ Wine is built for macOS 11 and newer, MoltenVK for macOS 12 and the app for macO
 
 ### What is not in it
 
-Nothing from the CrossOver app itself: not its user interface, no CrossTie installers, no D3DMetal from CrossOver and not CodeWeavers' compatibility database. GStreamer is not built yet.
+Nothing from the CrossOver app itself: not its user interface, no CrossTie installers, no D3DMetal from CrossOver and not CodeWeavers' compatibility database. No FFmpeg, and nothing from GStreamer's ugly plugins or gst-libav, whose codecs are under the GPL or have open patent questions.
 
 ### Compared with CrossOver 26.3
 
@@ -128,15 +129,16 @@ Nothing from the CrossOver app itself: not its user interface, no CrossTie insta
 | Settings per game | closed compatibility database | open rules (patch 0005, `compat/`) from protonfixes, Proton, ProtonDB and DXVK, and from AppleGamingWiki, made on your Mac |
 | One-click installers (CrossTie) | yes | no; `freequay fix` installs the runtime packages the rules ask for with winetricks |
 | User interface | yes | one window that starts programs (`Freequay.app`) and the command `freequay` |
-| GStreamer (videos in games) | yes | not built yet |
+| GStreamer (videos in games) | yes | yes, without FFmpeg: H.264, H.265, MPEG-2 and AAC through Apple's VideoToolbox and AudioToolbox |
 
 ## Build
 
 You need Xcode (MoltenVK is built with xcodebuild), Homebrew with `bison pkgconf mingw-w64 autoconf automake libtool m4 ninja glslang cabextract python` and about 4 GB of disk space for sources, build and result. All commands run from the root of the repository.
 
 ```bash
-scripts/fetch-sources.sh      # CodeWeavers' sources and nettle, unpacked and patched in sources/
+scripts/fetch-sources.sh      # CodeWeavers' sources, nettle, pcre2, proxy-libintl and gvdb, unpacked and patched in sources/
 scripts/build-deps.sh         # gmp, nettle, GnuTLS, FreeType in deps/
+scripts/build-gstreamer.sh    # GLib and GStreamer for the videos in games, in deps/
 scripts/build-moltenvk.sh     # CodeWeavers' MoltenVK in deps/lib; Wine's configure looks for it
 scripts/build-wine.sh         # Wine in dist/wine
 scripts/build-dxvk.sh         # DXVK in dist/backends/dxvk
@@ -145,11 +147,11 @@ scripts/install-mono.sh       # Wine Mono for new bottles
 scripts/compat/update.sh      # rules from the open sources, optional: compat/ has a recent copy
 ```
 
-`build-wine.sh` builds Wine for macOS 11 and newer and leaves out `pipe2`. The macOS 27 SDK has that function and older macOS does not; Wine calls it without checking, so with it Wine would most likely not start on macOS 26 and older. Releases up to 0.2.0 were built with it.
+`build-gstreamer.sh` builds GLib and GStreamer as x86_64 for macOS 11 with meson, as a cross build because meson runs on Homebrew's arm64 Python; Wine's configure finds them through pkg-config. The plugins decode through Apple's frameworks, so no FFmpeg is built. `build-wine.sh` builds Wine for macOS 11 and newer and leaves out `pipe2`. The macOS 27 SDK has that function and older macOS does not; Wine calls it without checking, so with it Wine would most likely not start on macOS 26 and older. Releases up to 0.2.0 were built with it.
 
 D3DMetal: the app leads to Apple's download and installs it. Without the app, download "Evaluation environment for Windows games" from developer.apple.com, mount it and run `scripts/install-d3dmetal.sh "/Volumes/<volume>"`. It installs D3DMetal 4 as `d3dmetal` and version 3 as `d3dmetal3` into `~/Library/Application Support/freequay/backends`, where it stays when Freequay is updated.
 
-`scripts/build-app.sh` builds `Freequay.app` into the root of the repository with swiftc from Xcode or the Command Line Tools, and the helpers in `scripts/compat`: `applegamingwiki`, `fix` and `cabextract`. `scripts/package.sh 0.3.1` builds them as well, puts the build with the launcher, the rules and the license texts into `Freequay.app/Contents/SharedSupport/freequay`, signs the app with `scripts/sign.sh` and packs it into `out/Freequay-0.3.1.dmg`, the release disk image. `sign.sh` signs every Mach-O file with the hardened runtime and the entitlements Wine needs (`app/Freequay.entitlements`); without an identity the signature is ad hoc, with a Developer ID (Apple's developer program) the same call signs for notarization, which then only needs `xcrun notarytool` and `xcrun stapler`.
+`scripts/build-app.sh` builds `Freequay.app` into the root of the repository with swiftc from Xcode or the Command Line Tools, and the helpers in `scripts/compat`: `applegamingwiki`, `fix` and `cabextract`. `scripts/package.sh 0.4.0` builds them as well, puts the build with the launcher, the rules and the license texts into `Freequay.app/Contents/SharedSupport/freequay`, signs the app with `scripts/sign.sh` and packs it into `out/Freequay-0.4.0.dmg`, the release disk image. `sign.sh` signs every Mach-O file with the hardened runtime and the entitlements Wine needs (`app/Freequay.entitlements`); without an identity the signature is ad hoc, with a Developer ID (Apple's developer program) the same call signs for notarization, which then only needs `xcrun notarytool` and `xcrun stapler`.
 
 ## Patches
 
@@ -159,9 +161,11 @@ D3DMetal: the app leads to Apple's download and installs it. Without the app, do
 - `0004-registry-hkcu-software-shared-view`: `HKCU\Software` is the same key for 32 and 64 bit, as on Windows 7 and later, even when a `Wow6432Node` exists below it. Steam creates one; Wine then redirected 32-bit access there, `steam_api64.dll` did not find the running Steam, and Team Fortress 2 crashed at start.
 - `0005-ntdll-compat-rules-per-program`: rules per program. Every program looks up rules for its path or Steam app ID in the files from `FREEQUAY_COMPAT_FILES` when it starts and gets its graphics backend, environment variables, DLL overrides and launch arguments from them; a broken launcher can be replaced by the game itself. ntdll sets environment variables before a child process starts, because Rosetta reads `ROSETTA_ADVERTISE_AVX` only at exec. That is how Steam runs with wined3d and a game started from it with DXVK. A program that imports `d3d12.dll` and has no backend rule gets D3DMetal or wined3d, because DXMT and DXVK have no Direct3D 12 and Wine's d3d12 does not work with their dxgi. Format and commands: `compat/README.md`.
 - `0006-cfgmgr32-reject-unknown-notification-handles`: `CM_Unregister_Notification` rejects unknown handles as Windows does. Steam's `steamclient64.dll` unregisters a stale handle when a game quits; Wine wrote into freed memory and an error dialog came up after Team Fortress 2.
+- `0007-winemac-defer-display-mode-while-hiding`: Cmd+Tab out of a game in exclusive fullscreen, which captured the displays to change their mode, comes back to the game. Wine hides the app on Cmd+Tab, but macOS deactivates it only a moment later. A game that restored the desktop mode and minimized itself in that moment, as Direct3D 9 games do, made winemac.drv capture the displays again, which brought the app back to the front: its window minimized, the screen black without Dock and menu bar, and Cmd+Tab leading away from the game. The mode is now kept for when the app is active again, as for an app in the background.
+- `0008-mfreadwrite-stride-of-converted-video-type`: the Media Foundation source reader gives a video type it converts to, such as RGB32 from NV12, the stride of that format, as Windows does; Wine's own tests mark this as a known difference. Before, it copied the NV12 stride, and a program that reads `MF_MT_DEFAULT_STRIDE` read every frame a quarter wide.
 - `dxvk-0003-config-from-environment`: DXVK also reads options from `DXVK_CONFIG` (separated by `;`), as DXVK 2.x does, so rules can set DXVK options per game.
 - `moltenvk-0002-spirv-cross-alias-overlapping-samplers`: DXVK declares a depth-compare twin of every Direct3D 9 sampler on the same binding. SPIRV-Cross turned the twin's texture into an alias of the argument buffer slot but forgot its sampler, so every Direct3D 9 pixel shader with a texture failed to compile in MoltenVK and DXVK drew nothing. The sampler now gets the same alias.
-- `dxvk-0001` and `moltenvk-0001` keep DXVK and MoltenVK buildable with mingw-w64 14 and Xcode 27.
+- `dxvk-0001`, `moltenvk-0001` and `glib-0001` keep DXVK, MoltenVK and GLib buildable with mingw-w64 14, Xcode 27 and Python 3.12 and newer.
 
 ## Rules from open sources
 
@@ -183,7 +187,7 @@ The one-time setup (winetricks verbs, registry values, Windows version) is done 
 
 ## Tests
 
-Graphics tests from 2026-10-13 on a MacBook Air M1 with macOS 27.0.1; the programs in `tests/` ran again with every backend on 2026-10-18 for 0.2.1, 0.2.2 and 0.3.0, and for 0.3.1 without `--backend` and with `dxvk`:
+Graphics tests from 2026-10-13 on a MacBook Air M1 with macOS 27.0.1; the programs in `tests/` ran again with every backend on 2026-10-18 for 0.2.1, 0.2.2 and 0.3.0, and for 0.3.1 and 0.4.0 without `--backend` and with `dxvk`:
 
 | Test | Result |
 |---|---|
@@ -212,7 +216,24 @@ The release archives were tested like a new user would: downloaded with the quar
 
 0.3.1 fixes the `cabextract` of 0.3.0, which left its work folder in the temporary folder of macOS after every call, several hundred MB for each DirectX package a game asked for. On Microsoft's DirectX package (`directx_Jun2010_redist.exe`) it now gives the same 40 cabinets and 40 DLLs as the real cabextract, byte for byte, and leaves no folder behind, also when a call fails. The image was tested like 0.3.0's, with the app approved by the Terminal steps above and Homebrew blocked as well: the first bottle took 61 seconds with the Wine Mono download, `freequay fix` set up a game with `d3dcompiler_43` and `d3dx9_43` in 48 seconds and left nothing in the temporary folder, the launcher removed a work folder older than an hour and kept a newer one, and all 12 programs passed without `--backend` and with `dxvk`.
 
-`tests/` has the small programs behind these tests; build them with mingw-w64 as their first comment says. `tests/rulecheck` shows what the rules changed for a program: its path, command line, environment variables and where `d3d11.dll` comes from.
+Steam's first start was tested again on 2026-10-19. After an update, Steam's updater starts a new copy of itself and ends with exit code 42. Without a change, the new copy came within two seconds in 8 fresh bottles in a row, started from the launcher and from the app, with the CPU busy, with a second click on Steam during an update and next to a Steam in another bottle; the sign-in window came after 94 to 143 seconds. Once, with the Mac very busy and its swap almost full, the old Steam wrote "Shutdown" after its second update, stayed without a window and started no new copy; the hangs of 2026-10-17 and 2026-10-18 also came while the Mac was short of memory or disk. With the change, the launcher started Steam again 30 seconds after the update in that case and when the new copy was killed or frozen on purpose at the first update; the sign-in window then came after 338 and 158 seconds. In five more fresh bottles in a row Steam came back by itself each time and the sign-in window came after 114 to 119 seconds, through the app's Install Steam after 137 seconds, and in a bottle where Steam was set up already after 20 seconds. With three first starts at once on one connection, Steam's download of its two largest packages broke off and Steam showed "Failed to load steamui.dll"; a full disk gives the same message. Steam then has to be started again.
+
+Patch 0007 was tested on 2026-10-19 with the build from this repository in a new bottle, with `tests/minimize-on-deactivate` as a 32- and a 64-bit program; `tests/macswitch` pressed Cmd+Tab and clicked into the window and on the Dock, each run only after 45 seconds without input at the Mac. Without a mode change, Cmd+Tab back brought the minimized window back already before the patch: borderless windows do go into the Dock. With a mode change to 2048×1280, the unpatched winemac.drv brought the program back to the front by itself in 2 of 16 switches, its window minimized; with a test build that sets the desktop mode in the moment macOS hides the app, in 4 of 4, once with the displays still captured and three times with Cmd+Tab then leading away from the program. With the patch, in 48 runs and 86 switches, with and without the mode change and that test build, on `WM_ACTIVATEAPP` and on `WM_ACTIVATE`, and with Direct3D 9 in exclusive fullscreen through `wined3d`, where Direct3D minimizes the window itself as in Alien Swarm, the program never came back by itself, and 79 of 81 returns by Cmd+Tab or a click on its Dock icon restored the window. The other two were in one run of the test build: macOS restored the window, but the program was not told, and seven reruns with logging did not show it again. All 12 graphics programs passed without `--backend` and with `dxmt`, `dxvk` and `wined3d`. Not tested: Alien Swarm itself.
+
+Video tests from 2026-10-19 on the same Mac. `tests/make-clip.swift` writes a 2-second MP4 with Apple's encoders: H.264 in the High profile with B-frames, 320×240 at 25 frames per second, with four colored quadrants that move on after one second, and AAC in stereo at 48 kHz, 440 Hz on the left and 1000 Hz on the right. `tests/mf-video` plays it through Media Foundation, `tests/dshow-video` through DirectShow; both check the decoded frames and sound themselves, without a screen capture, and count a hang as an error.
+
+| Test | Result |
+|---|---|
+| Media Foundation source reader, to RGB32 and float, 32- and 64-bit | all 50 frames with the right colors, 1.99 s of sound, 440 Hz left and 1000 Hz right. Correct with patch 0008; before it the reader reported a stride of 320 bytes instead of 1280 |
+| Media Foundation media session into sample grabbers, the way Unreal Engine 4 plays videos, 32- and 64-bit | played in real time (2.04 s); all frames and both tones correct |
+| DirectShow, with Wine's GStreamer splitter, sample grabbers and null renderers, 32- and 64-bit | played in 2.24 s; all frames (RGB32, bottom-up) and both tones (16-bit PCM) correct |
+| The same programs with 0.3.1 | Media Foundation refuses the file (`MF_E_UNSUPPORTED_BYTESTREAM_TYPE`) |
+
+The disk image with GStreamer was tested like 0.3.1's: the app copied out of it, an empty home directory and the build folders renamed. A new bottle took 26 seconds and all four video programs passed. The first run took 7 seconds instead of 4, because Rosetta translates GStreamer once and GStreamer lists its plugins once; the list is kept in the data folder. A bottle made by 0.3.1 got winegstreamer by itself at its first start and passed as well. As a check, all 12 graphics programs passed without `--backend` and with `dxvk`. GStreamer alone, outside Wine, also decoded H.265, MPEG-2, Motion JPEG, ProRes and MP3 test files to the end, and refused VP9 for lack of a decoder. GStreamer makes the disk image about 5 MB larger: 0.4.0's is 150 MB, 0.3.1's 146 MB. Not tried yet: the videos of a real game.
+
+0.4.0 combines the three changes above: the launcher that follows Steam's restarts, patch 0007 and GStreamer with patch 0008. Wine, GStreamer, the other libraries and DXVK were built fresh from the sources for it; MoltenVK, whose sources did not change, is the build of 0.3.1. The disk image was tested like 0.3.1's: the app copied out of it with the Terminal steps above and run with an empty home directory, the build folders renamed, and the build trees, Homebrew and the developer tools out of reach. The first bottle took 37 seconds with the Wine Mono download. The four video programs passed with the results in the table above, and all 12 graphics programs passed without `--backend` and with `dxvk`. Steam installed from Valve's installer in three new bottles, as the app's button does it. In the first, both restarts came within a second, the sign-in window came 99 seconds after the start, and the launcher did not step in. In the second, the new copy after the first update was stopped for half a minute after it had started; the launcher left it alone, and the window came after 140 seconds. In the third, the new copy was killed right after the update, before it had come up; the launcher started Steam again 30 seconds after the update, and the window came after 142 seconds. `tests/minimize-on-deactivate` ran 8 times, as a 32- and a 64-bit program: with the mode change to 2048×1280, with Direct3D 9 in exclusive fullscreen, without a mode change and minimizing on `WM_ACTIVATE`. In all 16 switches away by Cmd+Tab the window minimized and the program stayed in the background with the displays released. All 16 returns, 10 by Cmd+Tab and 6 by a click on its Dock icon, restored the window. The app itself, started from the copy with an empty home directory, showed its note on downloads first and listed Steam in a test bottle; its signature was still valid after all tests, so nothing was written into it. Not tried: the videos of a real game, and Alien Swarm itself.
+
+`tests/` has the small programs behind these tests; build them as their first comment says, with mingw-w64 and `macswitch` with clang, and the video clip with `tests/make-clip.swift`. `tests/rulecheck` shows what the rules changed for a program: its path, command line, environment variables and where `d3d11.dll` comes from. `tests/minimize-on-deactivate` is a fullscreen window that minimizes itself when the program loses the focus, and `tests/macswitch` presses Cmd+Tab and clicks the Dock for it; it needs Accessibility for the program that starts it.
 
 ## Folders
 
@@ -221,8 +242,8 @@ The release archives were tested like a new user would: downloaded with the quar
 ## License
 
 - Scripts, app, tests and documents of this repository: MIT, see `LICENSE`.
-- `patches/0*.patch` change Wine and are under Wine's license, LGPL-2.1-or-later. `patches/dxvk-*.patch` are under DXVK's zlib license, `patches/moltenvk-*.patch` under MoltenVK's Apache-2.0.
+- `patches/0*.patch` change Wine and are under Wine's license, LGPL-2.1-or-later, `patches/glib-*.patch` under GLib's, LGPL-2.1-or-later as well. `patches/dxvk-*.patch` are under DXVK's zlib license, `patches/moltenvk-*.patch` under MoltenVK's Apache-2.0.
 - The generated files in `compat/` keep the license of their source, named in each file's header: `protondb.txt` ODbL 1.0, `protonfixes.txt` BSD-2-Clause, `proton.txt` BSD-3-Clause, `dxvk.txt` zlib. Each row of `notes.tsv` names its source and keeps that source's license.
 - The rules from AppleGamingWiki are not part of Freequay: Freequay looks them up on your Mac, where they keep AppleGamingWiki's license, CC BY-NC-SA 3.0.
-- Builds contain Wine, DXVK, MoltenVK, DXMT and other components under their own licenses. If you pass a build on, those licenses apply, including the LGPL's source requirements. D3DMetal is Apple's and under Apple's license.
+- Builds contain Wine, GStreamer, GLib, DXVK, MoltenVK, DXMT and other components under their own licenses. If you pass a build on, those licenses apply, including the LGPL's source requirements. D3DMetal is Apple's and under Apple's license.
 - The app has the license texts of all its parts in `Contents/SharedSupport/freequay/licenses/`; `licenses/README.md` lists them and where their source code is.
