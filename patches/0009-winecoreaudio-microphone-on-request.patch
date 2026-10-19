@@ -1,0 +1,46 @@
+--- a/dlls/winecoreaudio.drv/coreaudio.c
++++ b/dlls/winecoreaudio.drv/coreaudio.c
+@@ -202,6 +202,17 @@
+     return ret;
+ }
+ 
++/* freequay: a program sees the Mac's microphones only when FREEQUAY_MICROPHONE=1 is in its
++ * environment, which a rule sets for that one program (env=FREEQUAY_MICROPHONE=1,
++ * compat/README.md). Without it Wine lists no capture device and opens none, whoever started
++ * the program and whatever macOS would allow. Sound output is not affected. */
++static BOOL microphone_allowed(void)
++{
++    const char *value = getenv("FREEQUAY_MICROPHONE");
++
++    return value && !strcmp(value, "1");
++}
++
+ static NTSTATUS unix_process_attach(void *args)
+ {
+ #ifdef _WIN64
+@@ -252,6 +263,12 @@
+         return STATUS_SUCCESS;
+     }
+ 
++    if(params->flow == eCapture && !microphone_allowed()){
++        TRACE("microphone off for this program, no capture devices\n");
++        params->result = S_OK;
++        return STATUS_SUCCESS;
++    }
++
+     size = sizeof(default_id);
+     sc = AudioObjectGetPropertyData(kAudioObjectSystemObject, &addr, 0, NULL, &size, &default_id);
+     if(sc != noErr){
+@@ -731,6 +748,12 @@
+ 
+     params->result = S_OK;
+ 
++    /* a device remembered from an earlier start is refused as well */
++    if(params->flow == eCapture && !microphone_allowed()){
++        params->result = AUDCLNT_E_DEVICE_INVALIDATED;
++        return STATUS_SUCCESS;
++    }
++
+     if (!(stream = calloc(1, sizeof(*stream)))) {
+         params->result = E_OUTOFMEMORY;
+         return STATUS_SUCCESS;

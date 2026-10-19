@@ -39,6 +39,8 @@
 	<string>public.app-category.games</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>A Windows game you allowed the microphone in Freequay's rules wants to record, for example for voice chat.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSPrincipalClass</key>
