@@ -1,0 +1,20 @@
+--- a/gio/gdbus-2.0/codegen/utils.py
++++ b/gio/gdbus-2.0/codegen/utils.py
+@@ -19,8 +19,8 @@
+ #
+ # Author: David Zeuthen <davidz@redhat.com>
+ 
+-import distutils.version
+ import os
++import re
+ import sys
+ 
+ 
+@@ -166,4 +166,6 @@
+         v = str(key[0])
+     else:
+         v = "0"
+-    return (distutils.version.LooseVersion(v), key[1])
++    # freequay: distutils is gone since Python 3.12; the numbers of a version compare like
++    # LooseVersion compared them
++    return ([int(n) for n in re.findall(r"\d+", v)], key[1])
