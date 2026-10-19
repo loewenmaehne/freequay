@@ -4,3 +4,5 @@
 *.log
 *.dxvk-cache
 macswitch
+*.mp4
+make-clip

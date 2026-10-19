@@ -1,0 +1,38 @@
+--- a/dlls/mfreadwrite/reader.c
++++ b/dlls/mfreadwrite/reader.c
+@@ -712,6 +712,26 @@
+             && SUCCEEDED(IMFMediaType_GetItem(src, attr, &value)))
+         *hr = IMFMediaType_SetItem(dst, attr, &value);
+     PropVariantClear(&value);
++}
++
++/* freequay: the default stride of the upstream type only fits the same format. For another one
++ * native gives the stride of that format (384 for RGB32 at 96 pixels after NV12, tests/mfplat.c);
++ * copying the NV12 stride made programs read RGB32 frames a quarter wide. */
++static void media_type_try_copy_stride(IMFMediaType *dst, IMFMediaType *src, HRESULT *hr)
++{
++    GUID dst_subtype, src_subtype;
++    UINT64 frame_size;
++    LONG stride;
++
++    if (FAILED(*hr) || SUCCEEDED(IMFMediaType_GetItem(dst, &MF_MT_DEFAULT_STRIDE, NULL)))
++        return;
++    if (FAILED(IMFMediaType_GetGUID(dst, &MF_MT_SUBTYPE, &dst_subtype))
++            || FAILED(IMFMediaType_GetGUID(src, &MF_MT_SUBTYPE, &src_subtype))
++            || IsEqualGUID(&dst_subtype, &src_subtype))
++        media_type_try_copy_attr(dst, src, &MF_MT_DEFAULT_STRIDE, hr);
++    else if (SUCCEEDED(IMFMediaType_GetUINT64(dst, &MF_MT_FRAME_SIZE, &frame_size))
++            && SUCCEEDED(MFGetStrideForBitmapInfoHeader(dst_subtype.Data1, frame_size >> 32, &stride)))
++        *hr = IMFMediaType_SetUINT32(dst, &MF_MT_DEFAULT_STRIDE, abs(stride));
+ }
+ 
+ /* update a media type with additional attributes reported by upstream element */
+@@ -738,7 +758,7 @@
+     media_type_try_copy_attr(media_type, upstream_type, &MF_MT_VIDEO_NOMINAL_RANGE, &hr);
+ 
+     if (!advanced)
+-        media_type_try_copy_attr(media_type, upstream_type, &MF_MT_DEFAULT_STRIDE, &hr);
++        media_type_try_copy_stride(media_type, upstream_type, &hr);
+ 
+     /* propagate common audio attributes */
+     media_type_try_copy_attr(media_type, upstream_type, &MF_MT_AUDIO_NUM_CHANNELS, &hr);

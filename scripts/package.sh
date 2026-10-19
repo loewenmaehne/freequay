@@ -2,7 +2,7 @@
 # Packs the finished build into Freequay.app on a disk image, which runs without Xcode, Homebrew or a
 # build of its own: open it, drag the app into Applications. The app carries everything in
 # Contents/SharedSupport/freequay, laid out like the repository: Wine, DXMT, DXVK, MoltenVK, the
-# x86_64 libraries, the launcher and its helpers, the rules and the license texts. What Freequay
+# x86_64 libraries with GStreamer, the launcher and its helpers, the rules and the license texts. What Freequay
 # downloads or installs later goes to ~/Library/Application Support/freequay, so the signed app stays
 # as it is. Left out: D3DMetal (Apple's license; the app leads to Apple's download), Wine Mono (the
 # first bottle downloads it from WineHQ), the rules from AppleGamingWiki (its license allows no
@@ -20,11 +20,13 @@ STAGE=$APP/Contents/SharedSupport/freequay
 OUT=$ROOT/out/Freequay-$VERSION.dmg
 SRC=$ROOT/sources
 NETTLE=$ROOT/downloads/nettle/x/nettle-3.10
+PCRE2=$ROOT/downloads/pcre2/x/pcre2-10.42
 
-for f in dist/wine/bin/wine dist/backends/dxmt dist/backends/dxvk deps/lib/libMoltenVK.dylib sources/wine; do
+for f in dist/wine/bin/wine dist/backends/dxmt dist/backends/dxvk deps/lib/libMoltenVK.dylib sources/wine \
+    sources/glib sources/gstreamer; do
   [[ -e $ROOT/$f ]] || { print -u2 "missing $f, build first (README, Build)"; exit 1; }
 done
-[[ -d $NETTLE ]] || { print -u2 "missing $NETTLE, run scripts/fetch-sources.sh"; exit 1; }
+for d in $NETTLE $PCRE2; do [[ -d $d ]] || { print -u2 "missing $d, run scripts/fetch-sources.sh"; exit 1; }; done
 
 print "==> staging $APP"
 rm -rf "$PKG"; mkdir -p "$PKG" "${OUT:h}"
@@ -49,15 +51,53 @@ for f in libMoltenVK.dylib libfreetype.6.dylib libgnutls.30.dylib libgmp.10.dyli
     libnettle.8.9.dylib libnettle.8.dylib libhogweed.6.9.dylib libhogweed.6.dylib; do
   cp -Pc "$DEPS$f" "$STAGE/deps/lib/"
 done
-for f in "$STAGE"/deps/lib/*.dylib(.); do
-  install_name_tool -id "@rpath/$(otool -D "$f" | tail -1 | xargs basename)" "$f" 2> /dev/null
-  otool -L "$f" | awk -v d="$DEPS" 'index($1, d) == 1 {print $1}' | sort -u |
-    while read -r dep; do install_name_tool -change "$dep" "@loader_path/${dep:t}" "$f" 2> /dev/null; done
+# GStreamer for winegstreamer: the plugins without the OpenGL one, which only draws into windows of
+# its own, the plugin scanner, and the libraries these and winegstreamer.so link to (GLib and
+# GStreamer's), found through otool. winegstreamer.so links them by their path in deps/.
+setopt extended_glob
+GST_PLUGINS=(${DEPS}gstreamer-1.0/(^libgstopengl).dylib(.N))
+GST_SCANNER=${DEPS:h}/libexec/gstreamer-1.0/gst-plugin-scanner  # DEPS ends in a slash
+GST_WINE=$STAGE/dist/wine/lib/wine/x86_64-unix/winegstreamer.so
+(( $#GST_PLUGINS )) && [[ -x $GST_SCANNER && -f $GST_WINE ]] ||
+  { print -u2 "missing GStreamer or winegstreamer, run scripts/build-gstreamer.sh and scripts/build-wine.sh reconfigure"; exit 1; }
+mkdir -p "$STAGE/deps/lib/gstreamer-1.0" "$STAGE/deps/libexec/gstreamer-1.0"
+cp -c $GST_PLUGINS "$STAGE/deps/lib/gstreamer-1.0/"
+cp -c "$GST_SCANNER" "$STAGE/deps/libexec/gstreamer-1.0/"
+todo=($GST_PLUGINS "$GST_SCANNER" "$GST_WINE")
+typeset -A linked
+while (( $#todo )); do
+  # libraries right in deps/lib; a plugin names itself in deps/lib/gstreamer-1.0 first
+  for dep in $(otool -L "$todo[1]" | awk -v d="$DEPS" 'NR > 1 && index($1, d) == 1 && substr($1, length(d) + 1) !~ /\// {print $1}'); do
+    [[ -n ${linked[$dep]:-} ]] || { linked[$dep]=1; todo+=("$dep"); }
+  done
+  shift todo
 done
+cp -c ${(k)linked} "$STAGE/deps/lib/"
+
+# moves a file's links into the build's deps/lib to the given folder (relative to @loader_path) and
+# drops its search paths into the build tree
+relink() { # file folder
+  local dep rpath
+  otool -L "$1" | awk -v d="$DEPS" 'NR > 1 && index($1, d) == 1 {print $1}' | sort -u |
+    while read -r dep; do install_name_tool -change "$dep" "@loader_path/$2${dep:t}" "$1" 2> /dev/null; done
+  otool -l "$1" | awk '$1 == "cmd" && $2 == "LC_RPATH" {getline; getline; print $2}' |
+    while read -r rpath; do [[ $rpath != /* ]] || install_name_tool -delete_rpath "$rpath" "$1" 2> /dev/null; done
+}
+for f in "$STAGE"/deps/lib/*.dylib(.) "$STAGE"/deps/lib/gstreamer-1.0/*.dylib; do
+  install_name_tool -id "@rpath/$(otool -D "$f" | tail -1 | xargs basename)" "$f" 2> /dev/null
+done
+for f in "$STAGE"/deps/lib/*.dylib(.); do relink "$f" ""; done
+for f in "$STAGE"/deps/lib/gstreamer-1.0/*.dylib; do relink "$f" ../; done
+relink "$STAGE/deps/libexec/gstreamer-1.0/gst-plugin-scanner" ../../lib/
+relink "$GST_WINE" ../../../../../deps/lib/
 codesign --force --sign - "$STAGE/deps/lib/libMoltenVK.dylib" 2> /dev/null
 # besides each other, the libraries may only use the system's
-if otool -L "$STAGE"/deps/lib/*.dylib(.) | awk '!/:$/ && $1 ~ /^\// && $1 !~ /^\/(usr\/lib|System)\//' | grep .; then
+gst_files=("$STAGE"/deps/lib/gstreamer-1.0/*.dylib "$STAGE/deps/libexec/gstreamer-1.0/gst-plugin-scanner" "$GST_WINE")
+if otool -L "$STAGE"/deps/lib/*.dylib(.) $gst_files | awk '!/:$/ && $1 ~ /^\// && $1 !~ /^\/(usr\/lib|System)\//' | grep .; then
   print -u2 "deps/lib still points into the build tree"; exit 1
+fi
+if otool -l "$STAGE"/deps/lib/*.dylib(.) $gst_files | awk '$1 == "cmd" && $2 == "LC_RPATH" {getline; getline; print $2}' | grep '^/'; then
+  print -u2 "a library still searches the build tree"; exit 1
 fi
 
 cp "$ROOT"/scripts/{freequay,install-d3dmetal.sh,install-mono.sh,link-backend.sh} "$STAGE/scripts/"
@@ -96,6 +136,12 @@ lic moltenvk/SPIRV-Cross "$SRC"/moltenvk/External/SPIRV-Cross-cx/{LICENSE,LICENS
 lic moltenvk/glslang "$SRC"/moltenvk/External/glslang/LICENSE.txt
 lic moltenvk/cereal "$SRC"/moltenvk/External/cereal/LICENSE
 lic moltenvk/Vulkan-Headers "$SRC"/moltenvk/External/Vulkan-Headers/{LICENSE.md,LICENSES/*}
+lic glib "$SRC"/glib/{COPYING,LICENSES/*.txt}
+lic glib/pcre2 "$PCRE2"/LICENCE
+lic glib/proxy-libintl "$SRC"/glib/subprojects/proxy-libintl/COPYING
+for p in gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad; do
+  lic gstreamer/$p "$SRC"/gstreamer/subprojects/$p/COPYING
+done
 
 print "==> signing"
 "$ROOT/scripts/sign.sh" "$APP" "$ID"
