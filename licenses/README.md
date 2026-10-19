@@ -6,12 +6,15 @@ Freequay.app contains the parts below, in `Contents/SharedSupport/freequay`. Eac
 
 | Part | Version | License | Texts |
 |---|---|---|---|
-| Wine with CodeWeavers' patches and Freequay's patches `0001` to `0006` | 11.0, from CrossOver 26.3.0 | LGPL-2.1-or-later | `wine/` |
+| Wine with CodeWeavers' patches and Freequay's patches `0001` to `0006` and `0008` | 11.0, from CrossOver 26.3.0 | LGPL-2.1-or-later | `wine/` |
 | Libraries Wine builds in: Capstone, compiler-rt, FAudio, FluidSynth, GSM, libjpeg, jxrlib, Little CMS, OpenLDAP, mpg123, musl, libpng, LibTIFF, LibTomCrypt, vkd3d, libxml2, libxslt, zlib | as in the Wine sources | their own: LGPL-2.1 (FluidSynth, mpg123, vkd3d), BSD, MIT, zlib and similar permissive licenses | `wine/libs/<name>/` |
 | GnuTLS, with the libtasn1 and libunistring it includes | 3.8.3 | LGPL-2.1-or-later; libunistring LGPL-3.0-or-later or GPL-2.0-or-later | `gnutls/`, texts of version 3 in `gmp/` |
 | GMP | 6.3.0 | LGPL-3.0-or-later or GPL-2.0-or-later | `gmp/` |
 | Nettle | 3.10 | LGPL-3.0-or-later or GPL-2.0-or-later | `nettle/` |
 | FreeType | 2.13.3 | FreeType License (FTL), chosen from FTL or GPL-2.0 | `freetype/` |
+| GLib (libglib, libgobject, libgmodule), with Freequay's patch `glib-0001` | 2.78.0, from CrossOver 26.3.0 | LGPL-2.1-or-later | `glib/` |
+| Inside GLib: pcre2 and proxy-libintl | 10.42 and 0.4 | pcre2 BSD-3-Clause (with an exemption for binary redistribution); proxy-libintl LGPL-2.0-or-later | `glib/pcre2/`, `glib/proxy-libintl/` |
+| GStreamer: the core and the libraries and plugins Wine's winegstreamer uses from base, good and bad | 1.24.4, from CrossOver 26.3.0 | LGPL-2.1-or-later; the MPEG program stream demuxer MPL-1.1 or LGPL, used under the LGPL | `gstreamer/` |
 | MoltenVK, CodeWeavers' version, with Freequay's patches `moltenvk-0001` and `-0002` | 1.2.10 | Apache-2.0 | `moltenvk/` |
 | Inside MoltenVK: SPIRV-Cross (CodeWeavers' version), glslang, cereal, Vulkan-Headers | as in MoltenVK's `ExternalRevisions` | Apache-2.0; glslang BSD-3-Clause and others; cereal BSD-3-Clause | `moltenvk/<name>/` |
 | DXVK, CodeWeavers' Mac version, with Freequay's patches `dxvk-0001` to `-0003` | 1.10.3 | zlib; the OpenVR header it uses BSD-3-Clause | `dxvk/` |
@@ -20,7 +23,7 @@ Freequay.app contains the parts below, in `Contents/SharedSupport/freequay`. Eac
 
 Portions of this software are copyright © 2024 The FreeType Project (www.freetype.org). All rights reserved.
 
-Freequay changed Wine, MoltenVK and DXVK; the changes are the files in `patches/` of the repository, described in the README.
+Freequay changed Wine, GLib, MoltenVK and DXVK; the changes are the files in `patches/` of the repository, described in the README.
 
 ## Rules per program
 
@@ -44,11 +47,13 @@ Each row of `notes.tsv` names its source and keeps that source's license.
 
 ## Source code
 
-The source of everything under the LGPL in the app (Wine with its built-in libraries, GnuTLS, GMP, Nettle) and of the other parts Freequay built is in these files, attached unchanged to the same GitHub release:
+The source of everything under the LGPL in the app (Wine with its built-in libraries, GnuTLS, GMP, Nettle, GLib, proxy-libintl, GStreamer) and of the other parts Freequay built is in these files, attached unchanged to the same GitHub release:
 
 | File | SHA-256 | Original location |
 |---|---|---|
-| `crossover-sources-26.3.0.tar.gz` (Wine, GnuTLS, GMP, FreeType, MoltenVK, SPIRV-Cross, DXVK) | `ac99c8ca4b3848f3e81784135f023df266b61c2345726ea55a50b3e030dd6872` | media.codeweavers.com/pub/crossover/source/ |
+| `crossover-sources-26.3.0.tar.gz` (Wine, GnuTLS, GMP, FreeType, GLib, GStreamer, MoltenVK, SPIRV-Cross, DXVK) | `ac99c8ca4b3848f3e81784135f023df266b61c2345726ea55a50b3e030dd6872` | media.codeweavers.com/pub/crossover/source/ |
 | `nettle-3.10.tar.gz` (Nettle; CodeWeavers' package lacks its `Makefile.in`) | `b4c518adb174e484cb4acea54118f02380c7133771e7e9beb98a0787194ee47c` | ftp.gnu.org/gnu/nettle/ |
+| `pcre2-10.42.tar.bz2` (pcre2, which GLib needs and the package lacks) | `8d36cd8cb6ea2a4c2bb358ff6411b0c788633a2a45dabbf1aeb4b701d1b5e840` | github.com/PhilipHazel/pcre2/releases/tag/pcre2-10.42 |
+| `proxy-libintl-0.4.tar.gz` (proxy-libintl, the same) | `13ef3eea0a3bc0df55293be368dfbcff5a8dd5f4759280f28e030d1494a5dffb` | github.com/frida/proxy-libintl, tag `0.4` |
 
 Freequay's patches and build scripts are the repository at the release's tag (github.com/loewenmaehne/freequay); `scripts/fetch-sources.sh` unpacks and patches the sources, the steps under "Build" in the README build what the app contains. MoltenVK's `fetchDependencies` gets glslang, cereal and Vulkan-Headers at the revisions in `ExternalRevisions`. DXMT 0.80: github.com/3Shain/dxmt, tag `v0.80`.

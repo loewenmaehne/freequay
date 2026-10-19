@@ -30,7 +30,7 @@ Tested on a MacBook Air M1 with 16 GB and macOS 27.0.1, not yet on an older macO
 | Rockstar Games Launcher with Social Club | installs, updates itself, signs in and opens its main window |
 | Black Myth: Wukong Benchmark Tool (Direct3D 12, D3DMetal) | hangs while loading, then Unreal's crash reporter comes up |
 
-Games that play videos through Media Foundation may show them black, because GStreamer is not built yet. Apple's D3DMetal (Direct3D 11 and 12) is not included; the app leads you to Apple's own download and installs it from there. Without it, Direct3D 12 runs on Wine's own d3d12 with vkd3d, tried so far only with small test programs.
+Videos in games play through GStreamer, for Media Foundation and DirectShow alike: MP4, AVI, Matroska, MPEG program streams, FLV and WAV, with H.264, H.265, MPEG-2, Motion JPEG and ProRes decoded by Apple's VideoToolbox and AAC and MP3 by AudioToolbox. There is no FFmpeg, so videos in WMV, VP8, VP9, Theora or MPEG-1 do not play. Tested through Wine so far is H.264 with AAC in MP4, with a test clip (see Tests), not yet the videos of a game. Apple's D3DMetal (Direct3D 11 and 12) is not included; the app leads you to Apple's own download and installs it from there. Without it, Direct3D 12 runs on Wine's own d3d12 with vkd3d, tried so far only with small test programs.
 
 ## Using the app
 
@@ -99,6 +99,7 @@ Freequay is not affiliated with, endorsed by or supported by CodeWeavers or Appl
 
 - Wine 11.0 with all CodeWeavers patches from `crossover-sources-26.3.0.tar.gz`: msync, the D3DMetal hooks in winemac.drv, Rosetta tweaks and their fixes for single programs (Steam, the Rockstar Games Launcher, Epic, Ubisoft Connect, GTA IV and others). Built as x86_64 for Rosetta 2; 32-bit programs run through WoW64.
 - FreeType, GnuTLS, nettle and gmp as x86_64 libraries from the same package. nettle 3.10 comes from the GNU release because the package lacks its `Makefile.in`.
+- GStreamer 1.24.4 with GLib 2.78.0 from the same package, for Wine's winegstreamer, which plays the videos and sounds of Media Foundation and DirectShow: the core, base and good plugins for the containers, and from the bad plugins the parsers and applemedia, which decodes through Apple's VideoToolbox and AudioToolbox. pcre2 10.42 and proxy-libintl 0.4, which GLib needs and the package lacks, come from their own releases.
 - Graphics backends, chosen per program:
   - `dxmt`: DXMT 0.80 (Feifan He, MIT; versions after 0.80 are LGPL-2.1), Direct3D 10 and 11 on Metal.
   - `dxvk`: DXVK 1.10.3, CodeWeavers' Mac version from the same package (zlib), Direct3D 9 and 11 over Vulkan, with CodeWeavers' MoltenVK (Apache-2.0), which emulates geometry shaders.
@@ -112,7 +113,7 @@ Wine is built for macOS 11 and newer, MoltenVK for macOS 12 and the app for macO
 
 ### What is not in it
 
-Nothing from the CrossOver app itself: not its user interface, no CrossTie installers, no D3DMetal from CrossOver and not CodeWeavers' compatibility database. GStreamer is not built yet.
+Nothing from the CrossOver app itself: not its user interface, no CrossTie installers, no D3DMetal from CrossOver and not CodeWeavers' compatibility database. No FFmpeg, and nothing from GStreamer's ugly plugins or gst-libav, whose codecs are under the GPL or have open patent questions.
 
 ### Compared with CrossOver 26.3
 
@@ -128,15 +129,16 @@ Nothing from the CrossOver app itself: not its user interface, no CrossTie insta
 | Settings per game | closed compatibility database | open rules (patch 0005, `compat/`) from protonfixes, Proton, ProtonDB and DXVK, and from AppleGamingWiki, made on your Mac |
 | One-click installers (CrossTie) | yes | no; `freequay fix` installs the runtime packages the rules ask for with winetricks |
 | User interface | yes | one window that starts programs (`Freequay.app`) and the command `freequay` |
-| GStreamer (videos in games) | yes | not built yet |
+| GStreamer (videos in games) | yes | yes, without FFmpeg: H.264, H.265, MPEG-2 and AAC through Apple's VideoToolbox and AudioToolbox |
 
 ## Build
 
 You need Xcode (MoltenVK is built with xcodebuild), Homebrew with `bison pkgconf mingw-w64 autoconf automake libtool m4 ninja glslang cabextract python` and about 4 GB of disk space for sources, build and result. All commands run from the root of the repository.
 
 ```bash
-scripts/fetch-sources.sh      # CodeWeavers' sources and nettle, unpacked and patched in sources/
+scripts/fetch-sources.sh      # CodeWeavers' sources, nettle, pcre2, proxy-libintl and gvdb, unpacked and patched in sources/
 scripts/build-deps.sh         # gmp, nettle, GnuTLS, FreeType in deps/
+scripts/build-gstreamer.sh    # GLib and GStreamer for the videos in games, in deps/
 scripts/build-moltenvk.sh     # CodeWeavers' MoltenVK in deps/lib; Wine's configure looks for it
 scripts/build-wine.sh         # Wine in dist/wine
 scripts/build-dxvk.sh         # DXVK in dist/backends/dxvk
@@ -145,7 +147,7 @@ scripts/install-mono.sh       # Wine Mono for new bottles
 scripts/compat/update.sh      # rules from the open sources, optional: compat/ has a recent copy
 ```
 
-`build-wine.sh` builds Wine for macOS 11 and newer and leaves out `pipe2`. The macOS 27 SDK has that function and older macOS does not; Wine calls it without checking, so with it Wine would most likely not start on macOS 26 and older. Releases up to 0.2.0 were built with it.
+`build-gstreamer.sh` builds GLib and GStreamer as x86_64 for macOS 11 with meson, as a cross build because meson runs on Homebrew's arm64 Python; Wine's configure finds them through pkg-config. The plugins decode through Apple's frameworks, so no FFmpeg is built. `build-wine.sh` builds Wine for macOS 11 and newer and leaves out `pipe2`. The macOS 27 SDK has that function and older macOS does not; Wine calls it without checking, so with it Wine would most likely not start on macOS 26 and older. Releases up to 0.2.0 were built with it.
 
 D3DMetal: the app leads to Apple's download and installs it. Without the app, download "Evaluation environment for Windows games" from developer.apple.com, mount it and run `scripts/install-d3dmetal.sh "/Volumes/<volume>"`. It installs D3DMetal 4 as `d3dmetal` and version 3 as `d3dmetal3` into `~/Library/Application Support/freequay/backends`, where it stays when Freequay is updated.
 
@@ -159,9 +161,10 @@ D3DMetal: the app leads to Apple's download and installs it. Without the app, do
 - `0004-registry-hkcu-software-shared-view`: `HKCU\Software` is the same key for 32 and 64 bit, as on Windows 7 and later, even when a `Wow6432Node` exists below it. Steam creates one; Wine then redirected 32-bit access there, `steam_api64.dll` did not find the running Steam, and Team Fortress 2 crashed at start.
 - `0005-ntdll-compat-rules-per-program`: rules per program. Every program looks up rules for its path or Steam app ID in the files from `FREEQUAY_COMPAT_FILES` when it starts and gets its graphics backend, environment variables, DLL overrides and launch arguments from them; a broken launcher can be replaced by the game itself. ntdll sets environment variables before a child process starts, because Rosetta reads `ROSETTA_ADVERTISE_AVX` only at exec. That is how Steam runs with wined3d and a game started from it with DXVK. A program that imports `d3d12.dll` and has no backend rule gets D3DMetal or wined3d, because DXMT and DXVK have no Direct3D 12 and Wine's d3d12 does not work with their dxgi. Format and commands: `compat/README.md`.
 - `0006-cfgmgr32-reject-unknown-notification-handles`: `CM_Unregister_Notification` rejects unknown handles as Windows does. Steam's `steamclient64.dll` unregisters a stale handle when a game quits; Wine wrote into freed memory and an error dialog came up after Team Fortress 2.
+- `0008-mfreadwrite-stride-of-converted-video-type`: the Media Foundation source reader gives a video type it converts to, such as RGB32 from NV12, the stride of that format, as Windows does; Wine's own tests mark this as a known difference. Before, it copied the NV12 stride, and a program that reads `MF_MT_DEFAULT_STRIDE` read every frame a quarter wide.
 - `dxvk-0003-config-from-environment`: DXVK also reads options from `DXVK_CONFIG` (separated by `;`), as DXVK 2.x does, so rules can set DXVK options per game.
 - `moltenvk-0002-spirv-cross-alias-overlapping-samplers`: DXVK declares a depth-compare twin of every Direct3D 9 sampler on the same binding. SPIRV-Cross turned the twin's texture into an alias of the argument buffer slot but forgot its sampler, so every Direct3D 9 pixel shader with a texture failed to compile in MoltenVK and DXVK drew nothing. The sampler now gets the same alias.
-- `dxvk-0001` and `moltenvk-0001` keep DXVK and MoltenVK buildable with mingw-w64 14 and Xcode 27.
+- `dxvk-0001`, `moltenvk-0001` and `glib-0001` keep DXVK, MoltenVK and GLib buildable with mingw-w64 14, Xcode 27 and Python 3.12 and newer.
 
 ## Rules from open sources
 
@@ -212,7 +215,18 @@ The release archives were tested like a new user would: downloaded with the quar
 
 0.3.1 fixes the `cabextract` of 0.3.0, which left its work folder in the temporary folder of macOS after every call, several hundred MB for each DirectX package a game asked for. On Microsoft's DirectX package (`directx_Jun2010_redist.exe`) it now gives the same 40 cabinets and 40 DLLs as the real cabextract, byte for byte, and leaves no folder behind, also when a call fails. The image was tested like 0.3.0's, with the app approved by the Terminal steps above and Homebrew blocked as well: the first bottle took 61 seconds with the Wine Mono download, `freequay fix` set up a game with `d3dcompiler_43` and `d3dx9_43` in 48 seconds and left nothing in the temporary folder, the launcher removed a work folder older than an hour and kept a newer one, and all 12 programs passed without `--backend` and with `dxvk`.
 
-`tests/` has the small programs behind these tests; build them with mingw-w64 as their first comment says. `tests/rulecheck` shows what the rules changed for a program: its path, command line, environment variables and where `d3d11.dll` comes from.
+Video tests from 2026-10-19 on the same Mac. `tests/make-clip.swift` writes a 2-second MP4 with Apple's encoders: H.264 in the High profile with B-frames, 320×240 at 25 frames per second, with four colored quadrants that move on after one second, and AAC in stereo at 48 kHz, 440 Hz on the left and 1000 Hz on the right. `tests/mf-video` plays it through Media Foundation, `tests/dshow-video` through DirectShow; both check the decoded frames and sound themselves, without a screen capture, and count a hang as an error.
+
+| Test | Result |
+|---|---|
+| Media Foundation source reader, to RGB32 and float, 32- and 64-bit | all 50 frames with the right colors, 1.99 s of sound, 440 Hz left and 1000 Hz right. Correct with patch 0008; before it the reader reported a stride of 320 bytes instead of 1280 |
+| Media Foundation media session into sample grabbers, the way Unreal Engine 4 plays videos, 32- and 64-bit | played in real time (2.04 s); all frames and both tones correct |
+| DirectShow, with Wine's GStreamer splitter, sample grabbers and null renderers, 32- and 64-bit | played in 2.24 s; all frames (RGB32, bottom-up) and both tones (16-bit PCM) correct |
+| The same programs with 0.3.1 | Media Foundation refuses the file (`MF_E_UNSUPPORTED_BYTESTREAM_TYPE`) |
+
+The disk image with GStreamer was tested like 0.3.1's: the app copied out of it, an empty home directory and the build folders renamed. A new bottle took 26 seconds and all four video programs passed. The first run took 7 seconds instead of 4, because Rosetta translates GStreamer once and GStreamer lists its plugins once; the list is kept in the data folder. A bottle made by 0.3.1 got winegstreamer by itself at its first start and passed as well. As a check, all 12 graphics programs passed without `--backend` and with `dxvk`. GStreamer alone, outside Wine, also decoded H.265, MPEG-2, Motion JPEG, ProRes and MP3 test files to the end, and refused VP9 for lack of a decoder. GStreamer makes the disk image 5.5 MB larger (151 MB). Not tried yet: the videos of a real game.
+
+`tests/` has the small programs behind these tests; build them with mingw-w64 as their first comment says, and the video clip with `tests/make-clip.swift`. `tests/rulecheck` shows what the rules changed for a program: its path, command line, environment variables and where `d3d11.dll` comes from.
 
 ## Folders
 
@@ -221,8 +235,8 @@ The release archives were tested like a new user would: downloaded with the quar
 ## License
 
 - Scripts, app, tests and documents of this repository: MIT, see `LICENSE`.
-- `patches/0*.patch` change Wine and are under Wine's license, LGPL-2.1-or-later. `patches/dxvk-*.patch` are under DXVK's zlib license, `patches/moltenvk-*.patch` under MoltenVK's Apache-2.0.
+- `patches/0*.patch` change Wine and are under Wine's license, LGPL-2.1-or-later, `patches/glib-*.patch` under GLib's, LGPL-2.1-or-later as well. `patches/dxvk-*.patch` are under DXVK's zlib license, `patches/moltenvk-*.patch` under MoltenVK's Apache-2.0.
 - The generated files in `compat/` keep the license of their source, named in each file's header: `protondb.txt` ODbL 1.0, `protonfixes.txt` BSD-2-Clause, `proton.txt` BSD-3-Clause, `dxvk.txt` zlib. Each row of `notes.tsv` names its source and keeps that source's license.
 - The rules from AppleGamingWiki are not part of Freequay: Freequay looks them up on your Mac, where they keep AppleGamingWiki's license, CC BY-NC-SA 3.0.
-- Builds contain Wine, DXVK, MoltenVK, DXMT and other components under their own licenses. If you pass a build on, those licenses apply, including the LGPL's source requirements. D3DMetal is Apple's and under Apple's license.
+- Builds contain Wine, GStreamer, GLib, DXVK, MoltenVK, DXMT and other components under their own licenses. If you pass a build on, those licenses apply, including the LGPL's source requirements. D3DMetal is Apple's and under Apple's license.
 - The app has the license texts of all its parts in `Contents/SharedSupport/freequay/licenses/`; `licenses/README.md` lists them and where their source code is.
