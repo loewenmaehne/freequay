@@ -1,0 +1,51 @@
+--- a/dlls/winemac.drv/cocoa_app.h
++++ b/dlls/winemac.drv/cocoa_app.h
+@@ -75,6 +75,7 @@
+     BOOL displaysCapturedForFullscreen;
+     BOOL displaysTemporarilyUncapturedForDialog;
+     BOOL temporarilyIgnoreResignEventsForDialog;
++    BOOL hidingForCommandTab;
+ 
+     NSArray*    cursorFrames;
+     int         cursorFrame;
+--- a/dlls/winemac.drv/cocoa_app.m
++++ b/dlls/winemac.drv/cocoa_app.m
+@@ -981,7 +981,13 @@
+ 
+             [self transformProcessToForeground:YES];
+ 
+-            BOOL active = [NSApp isActive];
++            /* freequay: after Command-Tab with the displays captured we hide ourselves, but macOS
++             * hides the app and activates the next one only a moment later. A fullscreen game that
++             * restores the desktop mode and minimizes itself in that moment made us capture the
++             * displays again, which brought this app back to the front: its window minimized, the
++             * screen black and Command-Tab leading away from it. Keep the mode for when we are
++             * active again instead, as for an inactive app. */
++            BOOL active = [NSApp isActive] && ![NSApp isHidden] && !hidingForCommandTab;
+ 
+             if ([originalDisplayModes count] || displaysCapturedForFullscreen ||
+                 !active || CGCaptureAllDisplays() == CGDisplayNoErr)
+@@ -1240,6 +1246,7 @@
+                     {
+                         // There's another visible app.  Just hide ourselves and let
+                         // the system activate the other app.
++                        hidingForCommandTab = TRUE;  /* freequay: until we resign active, see setMode */
+                         [NSApp hide:self];
+                         return;
+                     }
+@@ -2435,6 +2442,7 @@
+         NSNumber* displayID;
+         NSDictionary* modesToRealize = [latentDisplayModes autorelease];
+ 
++        hidingForCommandTab = FALSE;
+         latentDisplayModes = [[NSMutableDictionary alloc] init];
+         for (displayID in modesToRealize)
+         {
+@@ -2484,6 +2492,7 @@
+         macdrv_event* event;
+         WineEventQueue* queue;
+ 
++        hidingForCommandTab = FALSE;
+         [self invalidateGotFocusEvents];
+ 
+         if (!temporarilyIgnoreResignEventsForDialog)
