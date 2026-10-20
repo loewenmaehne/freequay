@@ -1,0 +1,34 @@
+--- a/MoltenVK/MoltenVK/Commands/MVKCmdPipeline.mm
++++ b/MoltenVK/MoltenVK/Commands/MVKCmdPipeline.mm
+@@ -55,6 +55,21 @@
+ 
+ #pragma mark -
+ #pragma mark MVKCmdPipelineBarrier
++
++// freequay: whether a barrier inside a render pass makes attachment writes visible to shader
++// reads, as DXVK's barrier before each draw that samples a Direct3D 9 texture which is also the
++// render target. A tiler writes a tile to memory only when the Metal render pass is done with it,
++// so such a read needs the pass split, the same as the GENERAL layout case below.
++static bool mvkIsAttachmentReadbackBarrier(const MVKPipelineBarrier& b) {
++	const VkAccessFlags2 attachmentWrites = (VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
++											 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
++											 VK_ACCESS_2_MEMORY_WRITE_BIT);
++	const VkAccessFlags2 shaderReads = (VK_ACCESS_2_SHADER_READ_BIT |
++										VK_ACCESS_2_SHADER_SAMPLED_READ_BIT |
++										VK_ACCESS_2_SHADER_STORAGE_READ_BIT |
++										VK_ACCESS_2_MEMORY_READ_BIT);
++	return mvkIsAnyFlagEnabled(b.srcAccessMask, attachmentWrites) && mvkIsAnyFlagEnabled(b.dstAccessMask, shaderReads);
++}
+ 
+ template <size_t N>
+ VkResult MVKCmdPipelineBarrier<N>::setContent(MVKCommandBuffer* cmdBuff,
+@@ -166,7 +181,8 @@
+ 	if (cmdEncoder->_mtlRenderEncoder && mtlFeats.tileBasedDeferredRendering) {
+ 		bool needsRenderpassRestart = false;
+ 		for (auto& b : _barriers) {
+-			if (b.type == MVKPipelineBarrier::Image && b.newLayout == VK_IMAGE_LAYOUT_GENERAL) {
++			if ((b.type == MVKPipelineBarrier::Image && b.newLayout == VK_IMAGE_LAYOUT_GENERAL) ||
++				mvkIsAttachmentReadbackBarrier(b)) {
+ 				needsRenderpassRestart = true;
+ 				break;
+ 			}
