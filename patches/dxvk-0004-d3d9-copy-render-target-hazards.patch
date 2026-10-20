@@ -1,0 +1,214 @@
+--- a/src/d3d9/d3d9_options.h
++++ b/src/d3d9/d3d9_options.h
+@@ -74,6 +74,11 @@
+     /// for rendering hazards
+     bool generalHazards;
+ 
++    /// Whether a draw that samples its own render target samples a copy of it instead.
++    /// On by default with MoltenVK: a tile-based GPU writes a tile to memory only when
++    /// it is done with it, so within one draw neighboring pixels may already be new.
++    bool copyRenderTargetHazards;
++
+     /// Anisotropic filter override
+     ///
+     /// Enforces anisotropic filtering with the
+--- a/src/d3d9/d3d9_options.cpp
++++ b/src/d3d9/d3d9_options.cpp
+@@ -83,6 +83,10 @@
+                             0, 0);
+     applyTristate(this->generalHazards, config.getOption<Tristate>("d3d9.generalHazards", Tristate::Auto));
+ 
++    this->copyRenderTargetHazards = adapter != nullptr
++                                 && adapter->matchesDriver(DxvkGpuVendor(0), VK_DRIVER_ID_MOLTENVK, 0, 0);
++    applyTristate(this->copyRenderTargetHazards, config.getOption<Tristate>("d3d9.copyRenderTargetHazards", Tristate::Auto));
++
+     std::string floatEmulation = Config::toLower(config.getOption<std::string>("d3d9.floatEmulation", "auto"));
+     if (floatEmulation == "strict") {
+       d3d9FloatEmulation = D3D9FloatEmulation::Strict;
+--- a/src/d3d9/d3d9_common_texture.h
++++ b/src/d3d9/d3d9_common_texture.h
+@@ -339,6 +339,30 @@
+ 
+     const Rc<DxvkImageView>& GetSampleView(bool srgb) const {
+       return m_sampleView.Pick(srgb && IsSrgbCompatible());
++    }
++
++    /**
++     * \brief Whether draws can sample a copy instead of this render target
++     *
++     * Only for 2D textures with a single mip level, which the copy covers completely.
++     */
++    bool CanCopyForHazard() const {
++      return m_type == D3DRTYPE_TEXTURE && m_desc.MipLevels == 1 && m_desc.ArraySize == 1
++          && m_image != nullptr && m_image->info().sampleCount == VK_SAMPLE_COUNT_1_BIT
++          && m_sampleView.Color != nullptr;
++    }
++
++    /**
++     * \brief Image a draw samples instead of this render target, created when first needed
++     */
++    const Rc<DxvkImage>& GetHazardCopy();
++
++    /**
++     * \brief View of the hazard copy, like the sample view
++     */
++    const Rc<DxvkImageView>& GetHazardCopyView(bool srgb) {
++      GetHazardCopy();
++      return m_hazardCopyView.Pick(srgb && IsSrgbCompatible() && m_hazardCopyView.Srgb != nullptr);
+     }
+ 
+     VkImageLayout DetermineRenderTargetLayout() const {
+@@ -490,6 +514,10 @@
+ 
+     D3D9ColorView                 m_sampleView;
+ 
++    Rc<DxvkImage>                 m_hazardCopy;
++
++    D3D9ColorView                 m_hazardCopyView;
++
+     D3D9SubresourceBitset         m_locked = { };
+ 
+     D3D9SubresourceBitset         m_readOnly = { };
+--- a/src/d3d9/d3d9_common_texture.cpp
++++ b/src/d3d9/d3d9_common_texture.cpp
+@@ -592,8 +592,41 @@
+       }
+     }
+   }
++
++
++  const Rc<DxvkImage>& D3D9CommonTexture::GetHazardCopy() {
++    if (likely(m_hazardCopy != nullptr))
++      return m_hazardCopy;
+ 
++    const Rc<DxvkDevice>& device = m_device->GetDXVKDevice();
+ 
++    DxvkImageCreateInfo info = m_image->info();
++    info.mipLevels     = 1;
++    info.usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
++    info.stages        = VK_PIPELINE_STAGE_TRANSFER_BIT | device->getShaderPipelineStages();
++    info.access        = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
++    info.tiling        = VK_IMAGE_TILING_OPTIMAL;
++    info.layout        = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
++    info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
++    info.shared        = VK_FALSE;
++    m_hazardCopy = device->createImage(info, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++
++    DxvkImageViewCreateInfo viewInfo = m_sampleView.Color->info();
++    viewInfo.minLevel  = 0;
++    viewInfo.numLevels = 1;
++    m_hazardCopyView.Color = device->createImageView(m_hazardCopy, viewInfo);
++
++    if (m_sampleView.Srgb != nullptr) {
++      viewInfo = m_sampleView.Srgb->info();
++      viewInfo.minLevel  = 0;
++      viewInfo.numLevels = 1;
++      m_hazardCopyView.Srgb = device->createImageView(m_hazardCopy, viewInfo);
++    }
++
++    return m_hazardCopy;
++  }
++
++
+   void D3D9CommonTexture::CreateSampleView(UINT Lod) {
+     // This will be a no-op for SYSTEMMEM types given we
+     // don't expose the cap to allow texturing with them.
+--- a/src/d3d9/d3d9_device.h
++++ b/src/d3d9/d3d9_device.h
+@@ -758,6 +758,10 @@
+     void UpdateActiveHazardsDS(uint32_t texMask);
+ 
+     void MarkRenderHazards();
++
++    bool CanCopyRenderHazards();
++
++    void CopyRenderTargetHazards();
+ 
+     void UploadManagedTexture(D3D9CommonTexture* pResource);
+ 
+--- a/src/d3d9/d3d9_device.cpp
++++ b/src/d3d9/d3d9_device.cpp
+@@ -5378,10 +5378,62 @@
+ 
+         m_activeHazardsDS |= 1 << samplerIdx;
+       }
++    }
++  }
++
++
++  bool D3D9DeviceEx::CanCopyRenderHazards() {
++    if (!m_d3d9Options.copyRenderTargetHazards)
++      return false;
++
++    for (uint32_t rtIdx : bit::BitMask(m_activeHazardsRT)) {
++      if (!m_state.renderTargets[rtIdx]->GetCommonTexture()->CanCopyForHazard())
++        return false;
+     }
++
++    return true;
+   }
+ 
+ 
++  void D3D9DeviceEx::CopyRenderTargetHazards() {
++    // Copy every render target this draw also samples, and let the draw sample the copy.
++    // The next draw binds the texture itself again.
++    for (uint32_t rtIdx : bit::BitMask(m_activeHazardsRT)) {
++      D3D9Surface* rtSurf = m_state.renderTargets[rtIdx].ptr();
++      D3D9CommonTexture* tex = rtSurf->GetCommonTexture();
++      bool copied = false;
++
++      for (uint32_t samplerIdx : bit::BitMask(m_psShaderMasks.samplerMask & m_activeRTTextures)) {
++        if (m_state.textures[samplerIdx] != rtSurf->GetBaseTexture())
++          continue;
++
++        auto shaderSampler = RemapStateSamplerShader(samplerIdx);
++        uint32_t slot = computeResourceSlotId(shaderSampler.first,
++          DxsoBindingType::Image, uint32_t(shaderSampler.second));
++        const bool srgb = m_state.samplerStates[samplerIdx][D3DSAMP_SRGBTEXTURE] & 0x1;
++
++        EmitCs([
++          cCopy    = copied ? nullptr : tex->GetHazardCopy(),
++          cSrc     = tex->GetImage(),
++          cExtent  = tex->GetImage()->mipLevelExtent(0),
++          cSlot    = slot,
++          cView    = tex->GetHazardCopyView(srgb)
++        ] (DxvkContext* ctx) {
++          if (cCopy != nullptr) {
++            VkImageSubresourceLayers layers = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
++            ctx->copyImage(cCopy, layers, VkOffset3D { 0, 0, 0 },
++                           cSrc, layers, VkOffset3D { 0, 0, 0 }, cExtent);
++          }
++          ctx->bindResourceView(cSlot, cView, nullptr);
++        });
++
++        copied = true;
++        m_dirtyTextures |= 1u << samplerIdx;
++      }
++    }
++  }
++
++
+   void D3D9DeviceEx::MarkRenderHazards() {
+     for (uint32_t rtIdx : bit::BitMask(m_activeHazardsRT)) {
+       // Guaranteed to not be nullptr...
+@@ -6110,7 +6162,9 @@
+ 
+ 
+   void D3D9DeviceEx::PrepareDraw(D3DPRIMITIVETYPE PrimitiveType) {
+-    if (unlikely(m_activeHazardsRT != 0)) {
++    const bool copyRenderHazards = unlikely(m_activeHazardsRT != 0) && CanCopyRenderHazards();
++
++    if (unlikely(m_activeHazardsRT != 0) && !copyRenderHazards) {
+       EmitCs([](DxvkContext* ctx) {
+         ctx->emitRenderTargetReadbackBarrier();
+       });
+@@ -6161,6 +6215,9 @@
+     if (usedDirtyTextures)
+       UndirtyTextures(usedDirtyTextures);
+ 
++    if (unlikely(copyRenderHazards))
++      CopyRenderTargetHazards();
++
+     if (m_flags.test(D3D9DeviceFlag::DirtyBlendState))
+       BindBlendState();
+ 
