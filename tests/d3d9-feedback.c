@@ -1,14 +1,15 @@
 /* d3d9-feedback: samples a texture that is bound as the render target at the same time, which
  * Direct3D 9 games do and DXVK supports with a barrier before each such draw. Apple GPUs render in
  * tiles and write a tile to memory only when the Metal render pass is done with it, so the read
- * sees the texture as it was before the pass unless MoltenVK splits the pass at that barrier
- * (patch moltenvk-0003). Four checks on 1024x768 A8R8G8B8 render target textures:
+ * sees the texture as it was before the pass unless the pass is split at that barrier (patch
+ * moltenvk-0003) or the draw samples a copy (patch dxvk-0004, what DXVK does on MoltenVK).
+ * Four checks on 1024x768 A8R8G8B8 render target textures:
  *   accumulate  16 full-screen draws into one pass, each reads its own pixel and adds 1/32:
- *               expects 128 everywhere; without the split every draw sees 0 and leaves 8
+ *               expects 128 everywhere; without either patch every draw sees 0 and leaves 8
  *   neighbor    a pattern, then one draw that reads the pixel to the right: expects the pattern
- *               shifted by one pixel. Within that one draw a tiler can still read a few pixels of
- *               a neighboring tile it already finished (OpenGL on the M1 does as well), so up to
- *               0.1 % wrong pixels pass
+ *               shifted by one pixel. Within that one draw a tiler that is only split still reads
+ *               a few pixels of a neighboring tile it already finished (OpenGL on the M1 does as
+ *               well), so up to 0.1 % wrong pixels pass; with the copy there are none
  *   pingpong    40 passes between two textures, each reads the other one: no feedback at all
  *   mip         draws into mip 1 while sampling mip 0 of the same texture
  * Wrong pixels are counted per check, with their place within 32-pixel tiles.
